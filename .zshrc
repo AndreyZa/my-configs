@@ -80,7 +80,8 @@ ZSH_THEME="powerlevel10k/powerlevel10k"
 plugins=(git
 kubectl
 docker
-helm)
+helm
+terraform)
 
 source $ZSH/oh-my-zsh.sh
 
@@ -118,3 +119,4 @@ export PATH=$PATH:/snap/bin
 export EDITOR=nano
 alias k=kubectl
 alias py="python3"
+alias tf=terraform
