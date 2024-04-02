@@ -80,6 +80,7 @@ ZSH_THEME="powerlevel10k/powerlevel10k"
 plugins=(git
 kubectl
 docker
+docker-compose
 helm
 terraform)
 
