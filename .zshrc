@@ -121,3 +121,13 @@ export EDITOR=nano
 alias k=kubectl
 alias py="python3"
 alias tf=terraform
+export VAGRANT_WSL_ENABLE_WINDOWS_ACCESS="1"
+export VAGRANT_WSL_WINDOWS_ACCESS_USER_HOME_PATH="/mnt/c/Users/Andrey/"
+export PATH="$PATH:/mnt/d/Programs/Virtualbox"
+
+# The next line updates PATH for Yandex Cloud CLI.
+if [ -f '/home/andrey/yandex-cloud/path.bash.inc' ]; then source '/home/andrey/yandex-cloud/path.bash.inc'; fi
+
+# The next line enables shell command completion for yc.
+if [ -f '/home/andrey/yandex-cloud/completion.zsh.inc' ]; then source '/home/andrey/yandex-cloud/completion.zsh.inc'; fi
+
