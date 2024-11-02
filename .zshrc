@@ -118,9 +118,10 @@ source $ZSH/oh-my-zsh.sh
 export PATH=$PATH:~/.local/bin
 export PATH=$PATH:/snap/bin
 export EDITOR=nano
-alias k=kubectl
 alias py="python3"
-alias tf=terraform
+alias python="python3"
+
+# Vagrant
 export VAGRANT_WSL_ENABLE_WINDOWS_ACCESS="1"
 export VAGRANT_WSL_WINDOWS_ACCESS_USER_HOME_PATH="/mnt/c/Users/Andrey/"
 export PATH="$PATH:/mnt/d/Programs/Virtualbox"
