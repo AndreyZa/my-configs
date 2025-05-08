@@ -82,6 +82,7 @@ kubectl
 docker
 docker-compose
 helm
+terragrunt
 terraform)
 
 source $ZSH/oh-my-zsh.sh
