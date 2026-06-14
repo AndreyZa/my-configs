@@ -10,11 +10,13 @@ ZSH_THEME="powerlevel10k/powerlevel10k"
 
 plugins=(git
 ansible
+brew
 kubectl
+zsh-kubecolor
 docker
 docker-compose
 helm
-brew
+vault
 terragrunt
 terraform)
 
@@ -27,11 +29,3 @@ export EDITOR=nano
 alias py="python3"
 alias python="python3"
 alias pip="pip3"
-alias tg="terragrunt"
-
-# The next line updates PATH for Yandex Cloud CLI.
-if [ -f '/home/andrey/yandex-cloud/path.bash.inc' ]; then source '/home/andrey/yandex-cloud/path.bash.inc'; fi
-
-# The next line enables shell command completion for yc.
-if [ -f '/home/andrey/yandex-cloud/completion.zsh.inc' ]; then source '/home/andrey/yandex-cloud/completion.zsh.inc'; fi
-
