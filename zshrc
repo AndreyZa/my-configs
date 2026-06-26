@@ -2,9 +2,11 @@ if [[ -r "${XDG_CACHE_HOME:-$HOME/.cache}/p10k-instant-prompt-${(%):-%n}.zsh" ]]
   source "${XDG_CACHE_HOME:-$HOME/.cache}/p10k-instant-prompt-${(%):-%n}.zsh"
 fi
 
-export PATH=$HOME/bin:/usr/local/bin:/snap/bin/:$PATH
+# export PATH=$HOME/bin:/usr/local/bin:/snap/bin/:$PATH
 
 export ZSH="$HOME/.oh-my-zsh"
+
+HIST_STAMPS="yyyy-mm-dd"
 
 ZSH_THEME="powerlevel10k/powerlevel10k"
 
