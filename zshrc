@@ -12,7 +12,6 @@ ZSH_THEME="powerlevel10k/powerlevel10k"
 
 plugins=(git
 ansible
-brew
 kubectl
 zsh-kubecolor
 docker
@@ -21,6 +20,9 @@ helm
 vault
 terragrunt
 terraform)
+
+# brew есть только на маке
+[[ "$OSTYPE" == darwin* ]] && plugins+=(brew)
 
 source $ZSH/oh-my-zsh.sh
 
