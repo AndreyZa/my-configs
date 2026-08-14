@@ -9,13 +9,13 @@ install_zsh() {
     Linux)
       if command -v apt >/dev/null 2>&1; then
         sudo apt update
-        sudo apt install -y zsh git curl
+        sudo apt install -y zsh git curl fzf
       elif command -v dnf >/dev/null 2>&1; then
-        sudo dnf install -y zsh git curl
+        sudo dnf install -y zsh git curl fzf
       elif command -v yum >/dev/null 2>&1; then
-        sudo yum install -y zsh git curl
+        sudo yum install -y zsh git curl fzf
       elif command -v pacman >/dev/null 2>&1; then
-        sudo pacman -Sy --noconfirm zsh git curl
+        sudo pacman -Sy --noconfirm zsh git curl fzf
       else
         echo "Unsupported Linux package manager"
         exit 1
@@ -28,7 +28,7 @@ install_zsh() {
         exit 1
       fi
 
-      brew install git curl
+      brew install git curl fzf
       # zsh обычно уже есть в macOS
       ;;
     *)
@@ -139,7 +139,7 @@ configure_terminal_font
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cp "$SCRIPT_DIR/zshrc" "$HOME/.zshrc"
 
-# готовая тема (rainbow-пресет p10k); поменять — p10k configure
+# готовая тема p10k из репозитория; поменять стиль — p10k configure
 [ -f "$SCRIPT_DIR/p10k.zsh" ] && cp "$SCRIPT_DIR/p10k.zsh" "$HOME/.p10k.zsh"
 
 # zsh как шелл по умолчанию (раньше приходилось делать руками)

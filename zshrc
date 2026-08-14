@@ -26,6 +26,19 @@ source $ZSH/oh-my-zsh.sh
 
 [[ ! -f ~/.p10k.zsh ]] || source ~/.p10k.zsh
 
+# история в риалтайме: каждая команда сразу в файл и видна другим сессиям
+# (oh-my-zsh включает share_history сам, но фиксируем явно)
+setopt SHARE_HISTORY
+
+# fzf: Ctrl+R — fuzzy-поиск по истории, Ctrl+T — по файлам, Alt+C — cd
+if [ -f /usr/share/doc/fzf/examples/key-bindings.zsh ]; then
+    source /usr/share/doc/fzf/examples/key-bindings.zsh
+fi
+
+if command -v kubecolor &> /dev/null; then
+  compdef kubecolor=kubectl
+fi
+
 export EDITOR=nano
 
 alias py="python3"
