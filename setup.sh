@@ -92,10 +92,55 @@ git clone \
   https://github.com/devopstales/zsh-kubecolor.git \
   "${ZSH_CUSTOM:-$HOME/.oh-my-zsh/custom}/plugins/zsh-kubecolor"
 
-# zshrc берём рядом со скриптом, а не из cwd — иначе запуск не из корня
+# Шрифты MesloLGS NF — нужны powerlevel10k для иконок
+install_fonts() {
+  case "$OS" in
+    Linux)  FONT_DIR="$HOME/.local/share/fonts" ;;
+    Darwin) FONT_DIR="$HOME/Library/Fonts" ;;
+  esac
+  mkdir -p "$FONT_DIR"
+
+  for v in "Regular" "Bold" "Italic" "Bold%20Italic"; do
+    name="MesloLGS NF $(printf '%s' "$v" | sed 's/%20/ /g').ttf"
+    [ -f "$FONT_DIR/$name" ] && continue
+    curl -fsSL -o "$FONT_DIR/$name" \
+      "https://github.com/romkatv/powerlevel10k-media/raw/master/MesloLGS%20NF%20${v}.ttf"
+  done
+
+  command -v fc-cache >/dev/null 2>&1 && fc-cache -f "$FONT_DIR" >/dev/null
+}
+
+# Прописать шрифт в терминал (best effort, только известные терминалы)
+configure_terminal_font() {
+  command -v gsettings >/dev/null 2>&1 || return 0
+  export DBUS_SESSION_BUS_ADDRESS="${DBUS_SESSION_BUS_ADDRESS:-unix:path=/run/user/$(id -u)/bus}"
+
+  if command -v ptyxis >/dev/null 2>&1; then
+    gsettings set org.gnome.Ptyxis use-system-font false 2>/dev/null \
+      && gsettings set org.gnome.Ptyxis font-name 'MesloLGS NF 11' 2>/dev/null \
+      || true
+  fi
+  if command -v gnome-terminal >/dev/null 2>&1; then
+    profile="$(gsettings get org.gnome.Terminal.ProfilesList default 2>/dev/null | tr -d \')"
+    if [ -n "${profile:-}" ]; then
+      schema="org.gnome.Terminal.Legacy.Profile:/org/gnome/terminal/legacy/profiles:/:${profile}/"
+      gsettings set "$schema" use-system-font false 2>/dev/null \
+        && gsettings set "$schema" font 'MesloLGS NF 11' 2>/dev/null \
+        || true
+    fi
+  fi
+}
+
+install_fonts
+configure_terminal_font
+
+# Конфиги берём рядом со скриптом, а не из cwd — иначе запуск не из корня
 # репозитория молча копирует не то (или падает)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cp "$SCRIPT_DIR/zshrc" "$HOME/.zshrc"
+
+# готовая тема (rainbow-пресет p10k); поменять — p10k configure
+[ -f "$SCRIPT_DIR/p10k.zsh" ] && cp "$SCRIPT_DIR/p10k.zsh" "$HOME/.p10k.zsh"
 
 # zsh как шелл по умолчанию (раньше приходилось делать руками)
 ZSH_BIN="$(command -v zsh)"
@@ -104,4 +149,4 @@ if [ "${SHELL:-}" != "$ZSH_BIN" ]; then
     || echo "chsh failed — switch manually: chsh -s $ZSH_BIN"
 fi
 
-echo "Installation completed. Start a new terminal (or run zsh) and run: p10k configure"
+echo "Installation completed. Start a new terminal; to restyle the prompt run: p10k configure"
