@@ -38,7 +38,41 @@ install_zsh() {
   esac
 }
 
+# kubecolor: жёсткая зависимость плагина zsh-kubecolor — почти все его
+# алиасы (kg, kgp, kaf, ...) зовут kubecolor напрямую и без бинаря биты
+install_kubecolor() {
+  if command -v kubecolor >/dev/null 2>&1; then
+    return
+  fi
+
+  case "$OS" in
+    Linux)
+      if command -v apt >/dev/null 2>&1 \
+        && apt-cache policy kubecolor 2>/dev/null | grep -q Candidate; then
+        sudo apt install -y kubecolor
+      else
+        # дистрибутивы без пакета: бинарь из релизов kubecolor/kubecolor
+        arch="$(uname -m)"
+        case "$arch" in
+          x86_64) arch=amd64 ;;
+          aarch64) arch=arm64 ;;
+        esac
+        tag="$(curl -fsSL https://api.github.com/repos/kubecolor/kubecolor/releases/latest \
+          | grep -om1 '"tag_name": *"[^"]*"' | grep -o 'v[0-9.]*')"
+        curl -fsSL "https://github.com/kubecolor/kubecolor/releases/download/${tag}/kubecolor_${tag#v}_linux_${arch}.tar.gz" \
+          | tar xz -C /tmp kubecolor
+        sudo install -m0755 /tmp/kubecolor /usr/local/bin/kubecolor
+        rm -f /tmp/kubecolor
+      fi
+      ;;
+    Darwin)
+      brew install kubecolor
+      ;;
+  esac
+}
+
 install_zsh
+install_kubecolor
 
 rm -rf "$HOME/.oh-my-zsh"
 
@@ -58,6 +92,16 @@ git clone \
   https://github.com/devopstales/zsh-kubecolor.git \
   "${ZSH_CUSTOM:-$HOME/.oh-my-zsh/custom}/plugins/zsh-kubecolor"
 
-cp zshrc "$HOME/.zshrc"
+# zshrc берём рядом со скриптом, а не из cwd — иначе запуск не из корня
+# репозитория молча копирует не то (или падает)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cp "$SCRIPT_DIR/zshrc" "$HOME/.zshrc"
 
-echo "Installation completed."
+# zsh как шелл по умолчанию (раньше приходилось делать руками)
+ZSH_BIN="$(command -v zsh)"
+if [ "${SHELL:-}" != "$ZSH_BIN" ]; then
+  sudo chsh -s "$ZSH_BIN" "$USER" || chsh -s "$ZSH_BIN" \
+    || echo "chsh failed — switch manually: chsh -s $ZSH_BIN"
+fi
+
+echo "Installation completed. Start a new terminal (or run zsh) and run: p10k configure"
