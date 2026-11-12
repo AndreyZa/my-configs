@@ -13,8 +13,10 @@ Usage: bash setup.sh [options]
 Install the terminal environment on Ubuntu/Debian or macOS.
   --check               Check prerequisites and installed files; change nothing
   --update              Refresh base OS packages and clean, managed dependency pins
-  --replace-config      Replace edited/existing dotfiles after saving a backup
-  --skip-packages       Use already installed zsh, git, curl and tar
+  --replace-config      Replace dotfiles, migrating personal settings to .zshrc.local
+  --restore-local [DIR] Recover personal settings from a backup (latest by default)
+                        No packages/downloads; keep current local overrides
+  --skip-packages       Use already installed zsh, git, curl, tar and Python 3
   --no-fonts            Skip Meslo font installation/checks
   --no-chsh             Leave the login shell unchanged
   --bootstrap-homebrew  Run the official Homebrew installer if brew is missing
@@ -26,6 +28,8 @@ Install the terminal environment on Ubuntu/Debian or macOS.
 Existing customizations are preserved. Conflicting dotfiles are written as
 *.my-configs-new. In an interactive terminal, choose whether to activate them.
 Otherwise review them and rerun the printed command with --replace-config.
+Replacement migrates personal settings without executing the old configuration.
+Use --restore-local if a previous installer already replaced your configuration.
 On a fresh Mac, install Command Line Tools first: xcode-select --install
 HELP
 }
@@ -33,11 +37,16 @@ HELP
 MC_TARGET="$HOME"
 MC_TARGET_EXPLICIT=0
 MC_CHECK=0 MC_UPDATE=0 MC_REPLACE=0 MC_SKIP_PACKAGES=0 MC_NO_FONTS=0 MC_NO_CHSH=0 MC_BOOTSTRAP_BREW=0 MC_DEVOPS=0
+MC_RESTORE_LOCAL=0 MC_RESTORE_FROM=''
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --check) MC_CHECK=1 ;;
     --update) MC_UPDATE=1 ;;
     --replace-config) MC_REPLACE=1 ;;
+    --restore-local)
+      MC_RESTORE_LOCAL=1
+      if [[ $# -ge 2 && "$2" != -* ]]; then MC_RESTORE_FROM=$2; shift; fi
+      ;;
     --skip-packages) MC_SKIP_PACKAGES=1 ;;
     --no-fonts) MC_NO_FONTS=1 ;;
     --no-chsh) MC_NO_CHSH=1 ;;
@@ -64,6 +73,12 @@ MC_BACKUP_DIR=''
 MC_CONFLICTS=0
 if [[ "$MC_TARGET" != "$HOME" ]]; then MC_NO_CHSH=1; fi
 
+if (( MC_RESTORE_LOCAL )); then
+  (( ! MC_CHECK && ! MC_UPDATE && ! MC_DEVOPS )) || mc_die '--restore-local cannot be combined with --check, --update or --devops'
+  mc_restore_local "$MC_RESTORE_FROM"
+  exit 0
+fi
+
 if (( MC_CHECK )); then
   mc_check_installation
   if (( MC_DEVOPS )); then "$BASH" "$BOOTSTRAP_ROOT/scripts/devops.sh" --check --target-dir "$MC_TARGET"; fi
@@ -71,7 +86,7 @@ if (( MC_CHECK )); then
 fi
 
 if (( ! MC_SKIP_PACKAGES )); then mc_install_packages; fi
-mc_require_commands git curl zsh tar
+mc_require_commands git curl zsh tar python3
 mkdir -p "$MC_TARGET" "$MC_STATE/templates"
 mc_install_fzf
 export PATH="$MC_TARGET/.local/share/my-configs/bin:$PATH"

@@ -1,6 +1,7 @@
 # shellcheck shell=bash
 # Shared bootstrap functions; sourced by setup.sh and the regression tests.
 # No changes are made merely by sourcing this file.
+MC_LIBRARY_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 mc_log() { printf '%s\n' "$*"; }
 mc_warn() { printf 'Warning: %s\n' "$*" >&2; }
@@ -75,7 +76,7 @@ mc_install_packages() {
   case "$MC_OS" in
     Linux)
       command -v apt-get >/dev/null 2>&1 || mc_die 'This installer supports Ubuntu/Debian (apt-get) and macOS'
-      packages=(ca-certificates zsh git curl fontconfig)
+      packages=(ca-certificates zsh git curl fontconfig python3)
       for package in "${packages[@]}"; do
         status=$(dpkg-query -W -f='${db:Status-Status}' "$package" 2>/dev/null) || status=''
         if [[ "$status" != installed ]]; then
@@ -111,7 +112,7 @@ mc_install_packages() {
       fi
       eval "$(mc_brew "$brew_bin" shellenv)"
       if (( MC_UPDATE )); then mc_brew "$brew_bin" update; fi
-      packages=(zsh git curl)
+      packages=(zsh git curl python)
       for package in "${packages[@]}"; do
         status=$(mc_brew "$brew_bin" list --versions --formula "$package" 2>/dev/null) || status=''
         if [[ -n "$status" ]]; then
@@ -326,7 +327,7 @@ mc_print_activation_command() {
 }
 
 mc_install_config() {
-  local source=$1 dest=$2 key=$3 baseline candidate
+  local source=$1 dest=$2 key=$3 baseline candidate local_stage=''
   baseline="$MC_STATE/templates/$key"
   [[ -f "$source" ]] || mc_die "Missing repository configuration: $source"
   if [[ -f "$dest" ]] && cmp -s "$source" "$dest"; then
@@ -342,16 +343,128 @@ mc_install_config() {
       mc_warn "Preserved $dest; prepared configuration: $candidate"
       return 0
     fi
-    if [[ -z "$MC_BACKUP_DIR" ]]; then
-      MC_BACKUP_DIR=$(mktemp -d "$MC_STATE/backup-$(date -u +%Y%m%dT%H%M%SZ).XXXXXX")
+    if [[ "$key" == zshrc && -f "$dest" ]]; then
+      local_stage=$(mktemp "$MC_STATE/.local-migration.XXXXXX")
+      if ! mc_prepare_local_migration "$dest" "$source" "$baseline" "$MC_TARGET/.zshrc.local" "$local_stage"; then
+        rm -f "$local_stage"
+        candidate=$(mc_prepare_config_candidate "$source" "$dest" "$key")
+        mc_die "Personal settings need review; current configuration preserved. Prepared: $candidate"
+      fi
     fi
+    mc_ensure_backup || return 1
     # Preserve the symlink itself as well as the destination of a regular file.
-    cp -Pp "$dest" "$MC_BACKUP_DIR/$key"
+    cp -Pp "$dest" "$MC_BACKUP_DIR/$key" || return 1
+    if [[ -f "$baseline" ]]; then cp -p "$baseline" "$MC_BACKUP_DIR/$key.template" || return 1; fi
+    if [[ -L "$dest" && -f "$dest" ]]; then
+      cp -p "$dest" "$MC_BACKUP_DIR/$key.contents" || return 1
+    fi
     mc_log "Backed up $dest"
+    if [[ -n "$local_stage" ]]; then
+      mc_apply_local_migration "$local_stage" || { rm -f "$local_stage"; return 1; }
+      rm -f "$local_stage"
+    fi
   fi
-  mc_atomic_copy "$source" "$dest"
-  mc_atomic_copy "$source" "$baseline"
+  mc_atomic_copy "$source" "$dest" || return 1
+  mc_atomic_copy "$source" "$baseline" || return 1
   mc_clear_applied_candidates "$source" "$dest" "$key"
+}
+
+mc_ensure_backup() {
+  if [[ -z "$MC_BACKUP_DIR" ]]; then
+    MC_BACKUP_DIR=$(mktemp -d "$MC_STATE/backup-$(date -u +%Y%m%dT%H%M%SZ).XXXXXX") || return 1
+  fi
+}
+
+# Parse only: the migration helper never sources user configuration. All failure
+# paths precede changes to either active file, including an existing local link.
+mc_prepare_local_migration() {
+  local old=$1 template=$2 baseline=$3 current_local=$4 output=$5
+  mc_require_commands python3 zsh
+  python3 "$MC_LIBRARY_DIR/migrate_zshrc.py" "$old" "$template" "$baseline" "$current_local" "$output" || return 1
+  if [[ -L "$MC_TARGET/.zshrc.local" || -e "$MC_TARGET/.zshrc.local" && ! -f "$MC_TARGET/.zshrc.local" ]]; then
+    if [[ ! -f "$MC_TARGET/.zshrc.local" ]] || ! cmp -s "$output" "$MC_TARGET/.zshrc.local"; then
+      mc_warn 'Cannot extend a linked or non-regular .zshrc.local automatically; active files are preserved'
+      return 1
+    fi
+  fi
+}
+
+mc_apply_local_migration() {
+  local stage=$1 dest="$MC_TARGET/.zshrc.local"
+  if [[ -f "$dest" ]] && cmp -s "$stage" "$dest"; then return 0; fi
+  if [[ ! -s "$stage" && ! -e "$dest" ]]; then return 0; fi
+  mc_ensure_backup || return 1
+  if [[ -f "$dest" ]]; then cp -p "$dest" "$MC_BACKUP_DIR/zshrc.local" || return 1; fi
+  mc_atomic_copy "$stage" "$dest" || return 1
+  mc_log "Personal settings preserved in $dest"
+}
+
+# Recovery intentionally bypasses packages, downloads, shell and font changes.
+# Merge the current active edits first so they win over older recovered settings.
+mc_restore_local() {
+  local requested=$1 backup old entry entry_old baseline stage_current stage_final
+  mc_require_commands python3 zsh
+  backup=$requested
+  if [[ -z "$backup" ]]; then
+    for entry in "$MC_STATE"/backup-*; do
+      [[ -d "$entry" ]] || continue
+      if [[ -f "$entry/zshrc.contents" ]]; then entry_old="$entry/zshrc.contents"
+      elif [[ -f "$entry/zshrc" ]]; then entry_old="$entry/zshrc"
+      else continue
+      fi
+      # Backing up a template upgrade must not hide an older personal config.
+      if cmp -s "$entry_old" "$BOOTSTRAP_ROOT/zshrc" \
+        || cmp -s "$entry_old" "$entry/zshrc.template" \
+        || cmp -s "$entry_old" "$MC_STATE/templates/zshrc"; then continue; fi
+      backup=$entry
+    done
+  fi
+  baseline="$MC_STATE/templates/zshrc"
+  if [[ -f "$backup/zshrc.template" ]]; then baseline="$backup/zshrc.template"; fi
+  [[ -n "$backup" && -d "$backup" ]] || mc_die 'No zshrc backup found; pass its directory after --restore-local'
+  if [[ -f "$backup/zshrc.contents" ]]; then old="$backup/zshrc.contents"
+  elif [[ -f "$backup/zshrc" ]]; then old="$backup/zshrc"
+  else mc_die "No readable zshrc in backup: $backup"
+  fi
+  mkdir -p "$MC_STATE/templates"
+  # Unchanged recovery must not even touch the state directory's timestamps.
+  stage_current=$(mktemp "${TMPDIR:-/tmp}/my-configs-restore-current.XXXXXX")
+  stage_final=$(mktemp "${TMPDIR:-/tmp}/my-configs-restore-final.XXXXXX")
+  if [[ -e "$MC_TARGET/.zshrc" || -L "$MC_TARGET/.zshrc" ]]; then
+    if ! mc_prepare_local_migration "$MC_TARGET/.zshrc" "$BOOTSTRAP_ROOT/zshrc" "$MC_STATE/templates/zshrc" "$MC_TARGET/.zshrc.local" "$stage_current"; then
+      rm -f "$stage_current" "$stage_final"
+      mc_die 'Could not preserve current personal settings; recovery made no changes'
+    fi
+  elif [[ -f "$MC_TARGET/.zshrc.local" ]]; then
+    cp "$MC_TARGET/.zshrc.local" "$stage_current" || return 1
+  fi
+  if ! mc_prepare_local_migration "$old" "$BOOTSTRAP_ROOT/zshrc" "$baseline" "$stage_current" "$stage_final"; then
+    rm -f "$stage_current" "$stage_final"
+    mc_die 'Could not migrate the selected backup; recovery made no changes'
+  fi
+  # No active config is replaced until both merges have passed syntax checks.
+  if [[ ! -f "$MC_TARGET/.zshrc" ]] || ! cmp -s "$BOOTSTRAP_ROOT/zshrc" "$MC_TARGET/.zshrc"; then
+    mc_ensure_backup || return 1
+    if [[ -e "$MC_TARGET/.zshrc" || -L "$MC_TARGET/.zshrc" ]]; then
+      cp -Pp "$MC_TARGET/.zshrc" "$MC_BACKUP_DIR/zshrc" || return 1
+      if [[ -f "$MC_STATE/templates/zshrc" ]]; then
+        cp -p "$MC_STATE/templates/zshrc" "$MC_BACKUP_DIR/zshrc.template" || return 1
+      fi
+      if [[ -L "$MC_TARGET/.zshrc" && -f "$MC_TARGET/.zshrc" ]]; then
+        cp -p "$MC_TARGET/.zshrc" "$MC_BACKUP_DIR/zshrc.contents" || return 1
+      fi
+    fi
+  fi
+  mc_apply_local_migration "$stage_final" || return 1
+  rm -f "$stage_current" "$stage_final"
+  if [[ ! -f "$MC_TARGET/.zshrc" ]] || ! cmp -s "$BOOTSTRAP_ROOT/zshrc" "$MC_TARGET/.zshrc"; then
+    mc_atomic_copy "$BOOTSTRAP_ROOT/zshrc" "$MC_TARGET/.zshrc" || return 1
+  fi
+  mc_atomic_copy "$BOOTSTRAP_ROOT/zshrc" "$MC_STATE/templates/zshrc" || return 1
+  mc_clear_applied_candidates "$BOOTSTRAP_ROOT/zshrc" "$MC_TARGET/.zshrc" zshrc
+  mc_log "Personal settings recovered from: $backup"
+  mc_log 'Откройте новый терминал или выполните: exec zsh'
+  if [[ -n "$MC_BACKUP_DIR" ]]; then mc_log "Backups: $MC_BACKUP_DIR"; fi
 }
 
 mc_font_manifest() {
@@ -552,7 +665,7 @@ mc_change_shell() {
 
 mc_check_installation() {
   local missing=0 unmanaged=0 name relative url ref commit entry style blob font_dir current origin changes
-  for name in git curl zsh tar; do
+  for name in git curl zsh tar python3; do
     if ! command -v "$name" >/dev/null 2>&1; then mc_warn "Missing command: $name"; missing=1; fi
   done
   mc_check_fzf || missing=1
@@ -580,6 +693,12 @@ mc_check_installation() {
     elif command -v zsh >/dev/null 2>&1; then zsh -n "$MC_TARGET/$name" || missing=1
     fi
   done
+  if [[ -e "$MC_TARGET/.zshrc.local" || -L "$MC_TARGET/.zshrc.local" ]]; then
+    if [[ ! -f "$MC_TARGET/.zshrc.local" ]] \
+      || ! zsh -dfn "$MC_TARGET/.zshrc.local" >/dev/null 2>&1; then
+      mc_warn 'Local configuration is unreadable or has invalid zsh syntax'; missing=1
+    fi
+  fi
   if (( ! MC_NO_FONTS )); then
     font_dir=$(mc_font_dir)
     while IFS='|' read -r style blob; do
