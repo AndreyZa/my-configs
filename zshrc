@@ -33,6 +33,26 @@ typeset -U path PATH
   path=("${tool_paths[@]}" "${path[@]}")
 }
 
+# Defaults precede personal initialization, including Oh My Zsh's history alias.
+HIST_STAMPS="yyyy-mm-dd"
+HISTFILE="${HISTFILE:-${ZDOTDIR:-$HOME}/.zsh_history}"
+HISTSIZE=50000
+SAVEHIST=50000
+setopt SHARE_HISTORY HIST_IGNORE_DUPS HIST_IGNORE_SPACE HIST_REDUCE_BLANKS HIST_VERIFY
+
+# Migrated initialization precedes framework/plugin selection. Existing local
+# files without this header retain their original, late-only loading behavior.
+_my_configs_local_file="${ZDOTDIR:-$HOME}/.zshrc.local"
+if [[ -r "$_my_configs_local_file" ]]; then
+  if IFS= read -r _my_configs_local_header < "$_my_configs_local_file" \
+    && [[ "$_my_configs_local_header" == '# my-configs: phased local configuration v1' ]]; then
+    _MY_CONFIGS_LOCAL_PHASE=early
+    source "$_my_configs_local_file"
+    unset _MY_CONFIGS_LOCAL_PHASE
+  fi
+  unset _my_configs_local_header
+fi
+
 export ZSH="${ZSH:-${ZDOTDIR:-$HOME}/.oh-my-zsh}"
 export ZSH_CUSTOM="${ZSH_CUSTOM:-$ZSH/custom}"
 # The installer updates its own pinned checkout via setup.sh --update. Leave
@@ -40,21 +60,20 @@ export ZSH_CUSTOM="${ZSH_CUSTOM:-$ZSH/custom}"
 if [[ -f "$ZSH/.git/my-configs-owner" ]]; then
   zstyle ':omz:update' mode disabled
 fi
-HIST_STAMPS="yyyy-mm-dd"
-# Honor an explicit HISTFILE, including /dev/null in isolated checks.
-HISTFILE="${HISTFILE:-${ZDOTDIR:-$HOME}/.zsh_history}"
-
-if [[ -r "$ZSH_CUSTOM/themes/powerlevel10k/powerlevel10k.zsh-theme" ]]; then
-  ZSH_THEME="powerlevel10k/powerlevel10k"
-else
-  ZSH_THEME=""
-  PROMPT='%n@%m %~ %# '
+if (( ! ${+ZSH_THEME} )); then
+  if [[ -r "$ZSH_CUSTOM/themes/powerlevel10k/powerlevel10k.zsh-theme" ]]; then
+    ZSH_THEME="powerlevel10k/powerlevel10k"
+  else
+    ZSH_THEME=""
+    PROMPT='%n@%m %~ %# '
+  fi
 fi
 
 # Optional command-line tools are installed separately. A base terminal should
 # never load a missing plugin or advertise aliases for an absent tool.
-plugins=()
-() {
+if (( ! ${+plugins} )); then
+  plugins=()
+  () {
   local plugin
   local -a available_plugins
   (( $+commands[git] )) && available_plugins+=(git)
@@ -78,15 +97,11 @@ plugins=()
       plugins+=("$plugin")
     fi
   done
-}
+  }
+fi
 
 [[ ! -r "$ZSH/oh-my-zsh.sh" ]] || source "$ZSH/oh-my-zsh.sh"
 [[ ! -r "${ZDOTDIR:-$HOME}/.p10k.zsh" ]] || source "${ZDOTDIR:-$HOME}/.p10k.zsh"
-
-# Keep the same history on disk as in memory, shared between terminal sessions.
-HISTSIZE=50000
-SAVEHIST=50000
-setopt SHARE_HISTORY HIST_IGNORE_DUPS HIST_IGNORE_SPACE HIST_REDUCE_BLANKS HIST_VERIFY
 
 # Prefer the integration shipped by the executable itself: minimal Ubuntu images
 # can omit package docs, and a newer binary must not load an older package script.
@@ -156,7 +171,8 @@ fi
 
 # Machine-specific paths, aliases, credentials integrations and version managers
 # belong here. The installer preserves this file.
-[[ ! -r "${ZDOTDIR:-$HOME}/.zshrc.local" ]] || source "${ZDOTDIR:-$HOME}/.zshrc.local"
+[[ ! -r "$_my_configs_local_file" ]] || source "$_my_configs_local_file"
+unset _my_configs_local_file
 
 # All custom widgets and bindings must exist before these two plugins are loaded.
 # Both plugins are sourced here only, not also included in the OMZ plugins array.

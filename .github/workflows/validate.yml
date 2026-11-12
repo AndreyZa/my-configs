@@ -33,7 +33,7 @@ jobs:
           sudo apt-get install -y zsh git curl fontconfig python3 shellcheck
       - name: Install test prerequisites (macOS)
         if: runner.os == 'macOS'
-        run: brew install zsh git curl shellcheck
+        run: brew install zsh git curl python shellcheck
       - name: Static checks
         run: |
           for script in setup.sh lib/bootstrap.sh scripts/devops.sh tests/*.sh; do /bin/bash -n "$script"; done
@@ -42,6 +42,7 @@ jobs:
       - name: Regression checks
         run: |
           /bin/bash tests/test_bootstrap.sh
+          python3 tests/test_migration.py
           /bin/bash tests/test_devops.sh
           /bin/bash tests/smoke_zsh.sh
       - name: Real installation and repeatability

@@ -168,6 +168,7 @@ FORWARD_TARGET="$TEST_TMP/forward-target"
 mkdir -p "$COPY/lib" "$COPY/scripts" "$FORWARD_TARGET"
 cp "$TEST_ROOT/setup.sh" "$COPY/setup.sh"
 cp "$TEST_ROOT/lib/bootstrap.sh" "$COPY/lib/bootstrap.sh"
+cp "$TEST_ROOT/lib/migrate_zshrc.py" "$COPY/lib/migrate_zshrc.py"
 # This test isolates argument forwarding from package availability.
 printf '\nmc_require_commands() { :; }\nmc_install_fzf() { :; }\nmc_install_packages() { echo unexpected-package-install >&2; return 1; }\nmc_install_fonts() { echo unexpected-font-install >&2; return 1; }\n' >> "$COPY/lib/bootstrap.sh"
 printf '# minimal test configuration\n' > "$COPY/zshrc"
@@ -290,7 +291,7 @@ pass 'managed fzf is verified, idempotent and preserves edits or failed updates'
   : > "$MC_TEST_APT_LOG"
   MC_TEST_APT_MISSING='' MC_UPDATE=1
   mc_install_packages
-  printf 'update\ninstall -y ca-certificates zsh git curl fontconfig\n' > "$TEST_TMP/apt-expected"
+  printf 'update\ninstall -y ca-certificates zsh git curl fontconfig python3\n' > "$TEST_TMP/apt-expected"
   assert_same "$TEST_TMP/apt-expected" "$MC_TEST_APT_LOG"
 )
 pass 'APT defaults to no-op or missing-only install; update targets named packages'
@@ -331,11 +332,11 @@ pass 'APT defaults to no-op or missing-only install; update targets named packag
   mc_install_packages
   grep -qx update "$MC_TEST_BREW_LOG"
   grep -qx 'install --formula curl' "$MC_TEST_BREW_LOG"
-  grep -qx 'upgrade --formula zsh git' "$MC_TEST_BREW_LOG"
+  grep -qx 'upgrade --formula zsh git python' "$MC_TEST_BREW_LOG"
   : > "$MC_TEST_BREW_LOG"
   MC_TEST_BREW_MISSING=all
   mc_install_packages
-  grep -qx 'install --formula zsh git curl' "$MC_TEST_BREW_LOG"
+  grep -qx 'install --formula zsh git curl python' "$MC_TEST_BREW_LOG"
   if grep -q '^upgrade' "$MC_TEST_BREW_LOG"; then exit 1; fi
 )
 pass 'Homebrew no-op/missing/update paths disable implicit maintenance and cleanup'
