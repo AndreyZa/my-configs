@@ -12,7 +12,7 @@ Usage: bash setup.sh [options]
 
 Install the terminal environment on Ubuntu/Debian or macOS.
   --check               Check prerequisites and installed files; change nothing
-  --update              Update clean, managed dependencies to this repo's pins
+  --update              Refresh base OS packages and clean, managed dependency pins
   --replace-config      Replace edited/existing dotfiles after saving a backup
   --skip-packages       Use already installed zsh, git, curl and tar
   --no-fonts            Skip Meslo font installation/checks

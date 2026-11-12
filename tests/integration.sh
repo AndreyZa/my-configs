@@ -5,20 +5,24 @@ repo=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 fixture=$(mktemp -d "${TMPDIR:-/tmp}/my-configs-integration.XXXXXX")
 trap 'rm -rf "$fixture"' EXIT
 target="$fixture/target with spaces"
+export XDG_CACHE_HOME="$target/.cache"
 
 # Invoke from another directory to catch accidental reliance on the caller's cwd.
 cd "$fixture"
 "$BASH" "$repo/setup.sh" --skip-packages --no-chsh --target-dir "$target"
 "$BASH" "$repo/setup.sh" --check --target-dir "$target"
-python3 "$repo/tests/pty_smoke.py" "$target"
 
 printf '%s\n' 'local user plugin' > "$target/.oh-my-zsh/custom/keep-user-file"
 printf '%s\n' '# local aliases are preserved' > "$target/.zshrc.local"
 cp "$target/.zshrc" "$fixture/original-zshrc"
+python3 "$repo/tests/snapshot_tree.py" capture "$target" "$fixture/before-repeat.json"
 "$BASH" "$repo/setup.sh" --skip-packages --no-chsh --target-dir "$target"
+"$BASH" "$repo/setup.sh" --check --target-dir "$target"
+python3 "$repo/tests/snapshot_tree.py" check "$target" "$fixture/before-repeat.json"
 cmp "$target/.zshrc" "$fixture/original-zshrc"
 test -f "$target/.oh-my-zsh/custom/keep-user-file"
 test -f "$target/.zshrc.local"
+python3 "$repo/tests/pty_smoke.py" "$target"
 
 printf '%s\n' '# manual customization' >> "$target/.zshrc"
 cp "$target/.zshrc" "$fixture/custom-zshrc"
