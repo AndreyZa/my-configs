@@ -427,8 +427,9 @@ mc_restore_local() {
   else mc_die "No readable zshrc in backup: $backup"
   fi
   mkdir -p "$MC_STATE/templates"
-  stage_current=$(mktemp "$MC_STATE/.restore-current.XXXXXX")
-  stage_final=$(mktemp "$MC_STATE/.restore-final.XXXXXX")
+  # Unchanged recovery must not even touch the state directory's timestamps.
+  stage_current=$(mktemp "${TMPDIR:-/tmp}/my-configs-restore-current.XXXXXX")
+  stage_final=$(mktemp "${TMPDIR:-/tmp}/my-configs-restore-final.XXXXXX")
   if [[ -e "$MC_TARGET/.zshrc" || -L "$MC_TARGET/.zshrc" ]]; then
     if ! mc_prepare_local_migration "$MC_TARGET/.zshrc" "$BOOTSTRAP_ROOT/zshrc" "$MC_STATE/templates/zshrc" "$MC_TARGET/.zshrc.local" "$stage_current"; then
       rm -f "$stage_current" "$stage_final"

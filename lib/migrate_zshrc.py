@@ -31,7 +31,8 @@ class MigrationError(Exception):
 def syntax(text):
     # Disable user and optional global rc files; -n never executes input code.
     result = subprocess.run(['zsh', '-dfn'], input=text.encode(),
-                            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                            env=dict(os.environ, LC_ALL='C'))
     return result.returncode, result.stderr
 
 
@@ -191,7 +192,7 @@ def read_optional(path):
         return ''
     if not p.is_file():
         raise MigrationError('Expected a regular configuration file')
-    return p.read_text(encoding='utf-8')
+    return p.read_bytes().decode('utf-8')
 
 
 def unpack_local(text):
@@ -258,7 +259,9 @@ def migrate(old, template, baseline, local):
     reference = blocks(baseline if baseline else template, 'template')
     early, late, existing = unpack_local(local)
     existing_blocks = blocks(existing, 'existing local configuration')
-    seen = {normalized(t) for t in early + late + [t for _, t in existing_blocks]}
+    # Equal text in another phase cannot replace execution before/after OMZ.
+    seen_early = {normalized(t) for t in early}
+    seen_late = {normalized(t) for t in late + [t for _, t in existing_blocks]}
     changed = False
     new_early, new_late = [], []
     old_blocks = blocks(old, 'previous configuration')
@@ -275,8 +278,20 @@ def migrate(old, template, baseline, local):
             modified_names.update(declaration_keys(text))
     primary = next((number for number, text in old_blocks
                     if 'oh-my-zsh.sh' in meaningful(text) and loader_block(text) is True), None)
+    existing_early_names = {name for text in early for name in declaration_keys(text)}
+    # Without an explicit framework boundary, only independent declarations can
+    # move early. A theme selected from another late variable must not silently
+    # become empty merely because its assignment was moved ahead of that value.
+    stable_names = {'HOME', 'ZDOTDIR', 'USER', 'LOGNAME', 'SHELL', 'TERM',
+                    'OSTYPE', 'MACHTYPE', 'HOST', 'HOSTNAME', 'PWD',
+                    'XDG_CONFIG_HOME', 'XDG_CACHE_HOME'}
+    late_variable_names = {name for _, text in old_blocks if not early_setting(text)
+                           for kind, name in declaration_keys(text) if kind == 'variable'}
+    available_early_names = stable_names - late_variable_names
     for index, (number, text) in enumerate(old_blocks):
         key = normalized(text)
+        is_early = number < primary if primary is not None else early_setting(text)
+        seen = seen_early if is_early else seen_late
         if not key or key in seen:
             continue
         if index in known and not declaration_keys(text).intersection(modified_names):
@@ -286,9 +301,17 @@ def migrate(old, template, baseline, local):
             raise MigrationError(f'Previous configuration: mixed or unrecognized loader at line {number}; review required')
         if loader:
             continue
+        declarations = declaration_keys(text)
+        if not is_early and declarations.intersection(existing_early_names):
+            raise MigrationError(f'Previous configuration: initialization conflict at line {number}; review required')
+        if is_early and primary is None:
+            code = meaningful(text)
+            referenced = set(re.findall(r'\$(?:\{)?([A-Za-z_][A-Za-z_0-9]*)', code))
+            if '$(' in code or '`' in code or referenced - available_early_names:
+                raise MigrationError(f'Previous configuration: ambiguous initialization dependency at line {number}; review required')
+            available_early_names.update(name for kind, name in declarations if kind == 'variable')
         # Preserve the original order and dependencies of the user's pre-OMZ
         # preamble (including compound PATH filters), without evaluating it here.
-        is_early = number < primary if primary is not None else early_setting(text)
         (new_early if is_early else new_late).append(text)
         changed = True
     if not changed:

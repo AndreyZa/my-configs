@@ -146,6 +146,19 @@ aiup
         self.assertEqual(self.local.read_text(), existing)
         self.load_local("[[ $aliases[shared_name] == from-local && $aliases[moved] == still-here ]] || exit 1\nlocal_tool >/dev/null")
 
+    def test_early_settings_are_not_replaced_by_identical_late_local_code(self):
+        initialization = 'export PERSONAL_EARLY_SETTING=required\nexport PATH="/opt/personal-cli:$PATH"\n'
+        self.helper(initialization + 'source "$ZSH/oh-my-zsh.sh"\nalias personal_late=available\n',
+                    local=initialization)
+        self.shell(r'''
+_MY_CONFIGS_LOCAL_PHASE=early
+source "$1"
+[[ $PERSONAL_EARLY_SETTING == required && $path[1] == /opt/personal-cli ]] || exit 1
+unset _MY_CONFIGS_LOCAL_PHASE
+source "$1"
+[[ $aliases[personal_late] == available ]] || exit 2
+''', self.output)
+
     def test_managed_template_is_not_copied_into_local(self):
         baseline = "# shared baseline\nexport SHARED_SETTING=old-default\nalias ordinary='old-shared'\n"
         self.template.write_text("# shared next version\nexport SHARED_SETTING=new-default\nalias ordinary='new-shared'\n")
@@ -178,6 +191,22 @@ aiup
     def test_personal_alias_can_refer_to_the_config_file(self):
         self.helper("alias editzsh='nano ~/.zshrc'\nalias editlocal='nano ~/.zshrc.local'\n")
         self.load_local("[[ $aliases[editzsh] == 'nano ~/.zshrc' && $aliases[editlocal] == 'nano ~/.zshrc.local' ]] || exit 1")
+
+    def test_framework_setting_with_late_dependency_preserves_active_config(self):
+        old = 'CUSTOM_THEME=robbyrussell\nZSH_THEME="$CUSTOM_THEME"\n'
+        (self.target / ".zshrc").write_text(old)
+        result = self.install()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual((self.target / ".zshrc").read_text(), old)
+        self.assertFalse((self.target / ".zshrc.local").exists())
+
+    def test_independent_framework_initialization_remains_supported(self):
+        self.helper('export ZSH="$HOME/.oh-my-zsh"\nexport ZSH_CUSTOM="$ZSH/custom"\nZSH_THEME=robbyrussell\n')
+        self.shell(r'''
+_MY_CONFIGS_LOCAL_PHASE=early
+source "$1"
+[[ $ZSH == "$HOME/.oh-my-zsh" && $ZSH_CUSTOM == "$ZSH/custom" && $ZSH_THEME == robbyrussell ]] || exit 1
+''', self.output)
 
     def test_second_migration_merges_new_commands_without_duplicates(self):
         old = "alias first='one'\n"
@@ -240,6 +269,13 @@ export PERSONAL_WORDS="one "\
             self.load_local('personal_text; multiline_name; print -r -- "$PERSONAL_WORDS"'),
             'if then } ; alias x=y\nsource "$ZSH/oh-my-zsh.sh"\nfunction body\none two\n',
         )
+
+    def test_literal_carriage_returns_keep_their_runtime_value(self):
+        self.helper('personal_literal() { print -rn -- "one\r\ntwo"; }\n')
+        result = subprocess.run(['zsh', '-dfc', 'source "$1"; personal_literal', '--', str(self.output)],
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=15)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, b"one\r\ntwo")
 
     def test_local_source_does_not_recurse_and_personal_source_is_retained(self):
         personal = self.root / "personal.zsh"
@@ -355,9 +391,14 @@ source "$ZDOTDIR/.zshrc"
         self.assertIn(existing, self.output.read_text())
         self.assertEqual((self.target / ".p10k.zsh").read_bytes(), prompt_before)
         before = self.file_snapshot()
+        snapshot = self.root / "recovery-tree.json"
+        subprocess.run([sys.executable, str(REPO / "tests/snapshot_tree.py"), "capture", str(self.target), str(snapshot)],
+                       check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         result = self.recovery(backup)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(self.file_snapshot(), before)
+        subprocess.run([sys.executable, str(REPO / "tests/snapshot_tree.py"), "check", str(self.target), str(snapshot)],
+                       check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
     def test_recovery_keeps_current_active_customizations_over_older_backup(self):
         self.recovery_fixture()
@@ -383,6 +424,18 @@ source "$ZDOTDIR/.zshrc"
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.output.write_bytes((self.target / ".zshrc.local").read_bytes())
         self.load_local("[[ $aliases[preferred] == edited-after-migration && $aliases[recovered] == present ]] || exit 1")
+
+    def test_recovery_refuses_to_override_current_early_setting_with_late_backup(self):
+        self.recovery_fixture()
+        self.helper('alias preferred=current\nsource "$ZSH/oh-my-zsh.sh"\n')
+        (self.target / ".zshrc.local").write_bytes(self.output.read_bytes())
+        backup = self.state / "backup-20000101T000000Z.personal"
+        backup.mkdir()
+        (backup / "zshrc").write_text("alias preferred=older\nalias recovered=present\n")
+        before = self.file_snapshot()
+        result = self.recovery(backup)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self.file_snapshot(), before)
 
     def test_recovery_chooses_latest_personal_zshrc_backup(self):
         self.recovery_fixture()
