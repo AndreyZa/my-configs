@@ -1,152 +1,102 @@
 #!/usr/bin/env bash
-
+# Compatible with macOS /bin/bash 3.2.
 set -euo pipefail
 
-OS="$(uname -s)"
+BOOTSTRAP_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/bootstrap.sh
+source "$BOOTSTRAP_ROOT/lib/bootstrap.sh"
 
-install_zsh() {
-  case "$OS" in
-    Linux)
-      if command -v apt >/dev/null 2>&1; then
-        sudo apt update
-        sudo apt install -y zsh git curl fzf
-      elif command -v dnf >/dev/null 2>&1; then
-        sudo dnf install -y zsh git curl fzf
-      elif command -v yum >/dev/null 2>&1; then
-        sudo yum install -y zsh git curl fzf
-      elif command -v pacman >/dev/null 2>&1; then
-        sudo pacman -Sy --noconfirm zsh git curl fzf
-      else
-        echo "Unsupported Linux package manager"
-        exit 1
-      fi
-      ;;
-    Darwin)
-      if ! command -v brew >/dev/null 2>&1; then
-        echo "Homebrew is not installed:"
-        echo "https://brew.sh"
-        exit 1
-      fi
+usage() {
+  cat <<'HELP'
+Usage: bash setup.sh [options]
 
-      brew install git curl fzf
-      # zsh обычно уже есть в macOS
-      ;;
-    *)
-      echo "Unsupported OS: $OS"
-      exit 1
-      ;;
+Install the terminal environment on Ubuntu/Debian or macOS.
+  --check               Check prerequisites and installed files; change nothing
+  --update              Update clean, managed dependencies to this repo's pins
+  --replace-config      Replace edited/existing dotfiles after saving a backup
+  --skip-packages       Use already installed zsh, git, curl and tar
+  --no-fonts            Skip Meslo font installation/checks
+  --no-chsh             Leave the login shell unchanged
+  --bootstrap-homebrew  Run the official Homebrew installer if brew is missing
+  --target-dir DIR      Install user files in DIR (default: current user's home)
+                        An alternative target never changes shell/GUI settings
+  --devops              Also run the optional scripts/devops.sh profile
+  -h, --help            Show this help
+
+Existing customizations are preserved. Conflicting dotfiles are written as
+*.my-configs-new; review them or rerun with --replace-config.
+On a fresh Mac, install Command Line Tools first: xcode-select --install
+HELP
+}
+
+MC_TARGET="$HOME"
+MC_CHECK=0 MC_UPDATE=0 MC_REPLACE=0 MC_SKIP_PACKAGES=0 MC_NO_FONTS=0 MC_NO_CHSH=0 MC_BOOTSTRAP_BREW=0 MC_DEVOPS=0
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --check) MC_CHECK=1 ;;
+    --update) MC_UPDATE=1 ;;
+    --replace-config) MC_REPLACE=1 ;;
+    --skip-packages) MC_SKIP_PACKAGES=1 ;;
+    --no-fonts) MC_NO_FONTS=1 ;;
+    --no-chsh) MC_NO_CHSH=1 ;;
+    --bootstrap-homebrew) MC_BOOTSTRAP_BREW=1 ;;
+    --devops) MC_DEVOPS=1 ;;
+    --target-dir)
+      [[ $# -ge 2 && -n "$2" ]] || mc_die '--target-dir requires a directory'
+      MC_TARGET=$2; shift ;;
+    -h|--help) usage; exit 0 ;;
+    *) mc_die "Unknown option: $1" ;;
   esac
-}
+  shift
+done
+case "$MC_TARGET" in /*) ;; *) MC_TARGET="$PWD/$MC_TARGET" ;; esac
+MC_TARGET=$(mc_canonical_target "$MC_TARGET")
+[[ "$MC_TARGET" != / ]] || mc_die 'Refusing to use / as the user directory'
+MC_OS=$(uname -s)
+case "$MC_OS" in Linux|Darwin) ;; *) mc_die "Unsupported OS: $MC_OS" ;; esac
+if [[ "$MC_OS" == Darwin ]]; then
+  if bootstrap_brew=$(mc_find_brew); then eval "$("$bootstrap_brew" shellenv)"; fi
+fi
+MC_STATE="$MC_TARGET/.local/state/my-configs"
+MC_BACKUP_DIR=''
+MC_CONFLICTS=0
+if [[ "$MC_TARGET" != "$HOME" ]]; then MC_NO_CHSH=1; fi
 
-# kubecolor: жёсткая зависимость плагина zsh-kubecolor — почти все его
-# алиасы (kg, kgp, kaf, ...) зовут kubecolor напрямую и без бинаря биты
-install_kubecolor() {
-  if command -v kubecolor >/dev/null 2>&1; then
-    return
-  fi
-
-  case "$OS" in
-    Linux)
-      if command -v apt >/dev/null 2>&1 \
-        && apt-cache policy kubecolor 2>/dev/null | grep -q Candidate; then
-        sudo apt install -y kubecolor
-      else
-        # дистрибутивы без пакета: бинарь из релизов kubecolor/kubecolor
-        arch="$(uname -m)"
-        case "$arch" in
-          x86_64) arch=amd64 ;;
-          aarch64) arch=arm64 ;;
-        esac
-        tag="$(curl -fsSL https://api.github.com/repos/kubecolor/kubecolor/releases/latest \
-          | grep -om1 '"tag_name": *"[^"]*"' | grep -o 'v[0-9.]*')"
-        curl -fsSL "https://github.com/kubecolor/kubecolor/releases/download/${tag}/kubecolor_${tag#v}_linux_${arch}.tar.gz" \
-          | tar xz -C /tmp kubecolor
-        sudo install -m0755 /tmp/kubecolor /usr/local/bin/kubecolor
-        rm -f /tmp/kubecolor
-      fi
-      ;;
-    Darwin)
-      brew install kubecolor
-      ;;
-  esac
-}
-
-install_zsh
-install_kubecolor
-
-rm -rf "$HOME/.oh-my-zsh"
-
-RUNZSH=no CHSH=no sh -c \
-  "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)"
-
-# Powerlevel10k
-git clone --depth=1 \
-  https://github.com/romkatv/powerlevel10k.git \
-  "${ZSH_CUSTOM:-$HOME/.oh-my-zsh/custom}/themes/powerlevel10k"
-
-git clone \
-  https://github.com/jkavan/terragrunt-oh-my-zsh-plugin \
-  "${ZSH_CUSTOM:-$HOME/.oh-my-zsh/custom}/plugins/terragrunt"
-
-git clone \
-  https://github.com/devopstales/zsh-kubecolor.git \
-  "${ZSH_CUSTOM:-$HOME/.oh-my-zsh/custom}/plugins/zsh-kubecolor"
-
-# Шрифты MesloLGS NF — нужны powerlevel10k для иконок
-install_fonts() {
-  case "$OS" in
-    Linux)  FONT_DIR="$HOME/.local/share/fonts" ;;
-    Darwin) FONT_DIR="$HOME/Library/Fonts" ;;
-  esac
-  mkdir -p "$FONT_DIR"
-
-  for v in "Regular" "Bold" "Italic" "Bold%20Italic"; do
-    name="MesloLGS NF $(printf '%s' "$v" | sed 's/%20/ /g').ttf"
-    [ -f "$FONT_DIR/$name" ] && continue
-    curl -fsSL -o "$FONT_DIR/$name" \
-      "https://github.com/romkatv/powerlevel10k-media/raw/master/MesloLGS%20NF%20${v}.ttf"
-  done
-
-  command -v fc-cache >/dev/null 2>&1 && fc-cache -f "$FONT_DIR" >/dev/null
-}
-
-# Прописать шрифт в терминал (best effort, только известные терминалы)
-configure_terminal_font() {
-  command -v gsettings >/dev/null 2>&1 || return 0
-  export DBUS_SESSION_BUS_ADDRESS="${DBUS_SESSION_BUS_ADDRESS:-unix:path=/run/user/$(id -u)/bus}"
-
-  if command -v ptyxis >/dev/null 2>&1; then
-    gsettings set org.gnome.Ptyxis use-system-font false 2>/dev/null \
-      && gsettings set org.gnome.Ptyxis font-name 'MesloLGS NF 11' 2>/dev/null \
-      || true
-  fi
-  if command -v gnome-terminal >/dev/null 2>&1; then
-    profile="$(gsettings get org.gnome.Terminal.ProfilesList default 2>/dev/null | tr -d \')"
-    if [ -n "${profile:-}" ]; then
-      schema="org.gnome.Terminal.Legacy.Profile:/org/gnome/terminal/legacy/profiles:/:${profile}/"
-      gsettings set "$schema" use-system-font false 2>/dev/null \
-        && gsettings set "$schema" font 'MesloLGS NF 11' 2>/dev/null \
-        || true
-    fi
-  fi
-}
-
-install_fonts
-configure_terminal_font
-
-# Конфиги берём рядом со скриптом, а не из cwd — иначе запуск не из корня
-# репозитория молча копирует не то (или падает)
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-cp "$SCRIPT_DIR/zshrc" "$HOME/.zshrc"
-
-# готовая тема p10k из репозитория; поменять стиль — p10k configure
-[ -f "$SCRIPT_DIR/p10k.zsh" ] && cp "$SCRIPT_DIR/p10k.zsh" "$HOME/.p10k.zsh"
-
-# zsh как шелл по умолчанию (раньше приходилось делать руками)
-ZSH_BIN="$(command -v zsh)"
-if [ "${SHELL:-}" != "$ZSH_BIN" ]; then
-  sudo chsh -s "$ZSH_BIN" "$USER" || chsh -s "$ZSH_BIN" \
-    || echo "chsh failed — switch manually: chsh -s $ZSH_BIN"
+if (( MC_CHECK )); then
+  mc_check_installation
+  if (( MC_DEVOPS )); then "$BASH" "$BOOTSTRAP_ROOT/scripts/devops.sh" --check --target-dir "$MC_TARGET"; fi
+  exit 0
 fi
 
-echo "Installation completed. Start a new terminal; to restyle the prompt run: p10k configure"
+if (( ! MC_SKIP_PACKAGES )); then mc_install_packages; fi
+mc_require_commands git curl zsh tar
+mkdir -p "$MC_TARGET" "$MC_STATE/templates"
+mc_install_fzf
+export PATH="$MC_TARGET/.local/share/my-configs/bin:$PATH"
+mc_require_commands fzf
+while IFS='|' read -r name relative url ref commit entry; do
+  mc_install_repo "$name" "$MC_TARGET/$relative" "$url" "$ref" "$commit" "$entry"
+done < <(mc_sources)
+
+if (( ! MC_NO_FONTS )); then
+  mc_install_fonts
+  mc_configure_terminal_font
+fi
+mc_install_config "$BOOTSTRAP_ROOT/zshrc" "$MC_TARGET/.zshrc" zshrc
+mc_install_config "$BOOTSTRAP_ROOT/p10k.zsh" "$MC_TARGET/.p10k.zsh" p10k.zsh
+zsh -n "$MC_TARGET/.zshrc"
+zsh -n "$MC_TARGET/.p10k.zsh"
+if (( ! MC_NO_CHSH )); then mc_change_shell; fi
+if (( MC_DEVOPS )); then
+  devops_args=(--target-dir "$MC_TARGET")
+  if (( MC_UPDATE )); then devops_args+=(--update); fi
+  if (( MC_SKIP_PACKAGES )); then devops_args+=(--skip-packages); fi
+  "$BASH" "$BOOTSTRAP_ROOT/scripts/devops.sh" "${devops_args[@]}"
+fi
+mc_log 'Installation completed. Open a new terminal.'
+mc_log 'Local additions belong in ~/.zshrc.local; restyle the prompt with p10k configure.'
+if (( MC_CONFLICTS )); then mc_warn 'Existing dotfiles were preserved. Review *.my-configs-new before activation.'; fi
+if [[ -n "$MC_BACKUP_DIR" ]]; then mc_log "Backups: $MC_BACKUP_DIR"; fi
+if [[ "$MC_OS" == Darwin ]] && (( ! MC_NO_FONTS )); then
+  mc_log 'In Terminal/iTerm2 select the installed MesloLGS NF font for your profile.'
+fi
