@@ -157,6 +157,10 @@ def loader_block(text):
         return False
     lines = [x.strip() for x in code.splitlines()
              if x.strip() and not x.lstrip().startswith('#')]
+    if (lines and 'powerlevel10k.zsh-theme' in lines[0] and lines[-1] == 'fi'
+            and re.fullmatch(r'if\s+' + FILE_TEST + r';\s*then', lines[0])
+            and not any(re.match(r'(?:source|\.)\s+', item) for item in lines[1:-1])):
+        return False
     # Common guarded one-line loaders. The target must name a known integration;
     # a second command separated by ;, && or || is never silently discarded.
     if len(lines) == 1 and known_loader_line(lines[0]):

@@ -376,6 +376,113 @@ source "$ZDOTDIR/.zshrc"
 [[ $HISTSIZE == 70000 && $SAVEHIST == 70000 && $HIST_STAMPS == dd.mm.yyyy ]] || exit 2
 ''', self.target)
 
+    def test_previous_theme_selector_allows_later_personal_theme(self):
+        custom = self.target / "custom"
+        theme = custom / "themes/powerlevel10k/powerlevel10k.zsh-theme"
+        theme.parent.mkdir(parents=True)
+        theme.touch()
+        baseline = (
+            'if [[ -r "$ZSH_CUSTOM/themes/powerlevel10k/powerlevel10k.zsh-theme" ]]; then\n'
+            '  ZSH_THEME="powerlevel10k/powerlevel10k"\n'
+            'else\n'
+            '  ZSH_THEME=""\n'
+            "  PROMPT='%n@%m %~ %# '\n"
+            'fi\n'
+            'source "$ZSH/oh-my-zsh.sh"\n'
+        )
+        self.helper(baseline + 'ZSH_THEME="personal-theme"\n', baseline=baseline)
+        self.shell(r'''
+ZSH_CUSTOM=$2
+_MY_CONFIGS_LOCAL_PHASE=early
+source "$1"
+unset _MY_CONFIGS_LOCAL_PHASE
+source "$1"
+[[ $ZSH_THEME == personal-theme ]] || exit 1
+''', self.output, custom)
+
+    def test_previous_theme_selector_allows_edited_personal_theme(self):
+        custom = self.target / "custom"
+        theme = custom / "themes/powerlevel10k/powerlevel10k.zsh-theme"
+        theme.parent.mkdir(parents=True)
+        theme.touch()
+        baseline = (
+            'if [[ -r "$ZSH_CUSTOM/themes/powerlevel10k/powerlevel10k.zsh-theme" ]]; then\n'
+            '  ZSH_THEME="powerlevel10k/powerlevel10k"\n'
+            'else\n'
+            '  ZSH_THEME=""\n'
+            "  PROMPT='%n@%m %~ %# '\n"
+            'fi\n'
+            'source "$ZSH/oh-my-zsh.sh"\n'
+        )
+        old = baseline.replace('ZSH_THEME="powerlevel10k/powerlevel10k"', 'ZSH_THEME="personal-theme"', 1)
+        self.helper(old, baseline=baseline)
+        self.shell(r'''
+ZSH_CUSTOM=$2
+_MY_CONFIGS_LOCAL_PHASE=early
+source "$1"
+unset _MY_CONFIGS_LOCAL_PHASE
+source "$1"
+[[ $ZSH_THEME == personal-theme ]] || exit 1
+''', self.output, custom)
+
+    def test_previous_plugin_detection_keeps_defaults_before_personal_append(self):
+        framework = self.target / ".oh-my-zsh"
+        plugin = framework / "plugins/git/git.plugin.zsh"
+        plugin.parent.mkdir(parents=True)
+        plugin.touch()
+        (framework / "oh-my-zsh.sh").write_text(r'''
+if [[ ${(j:,:)plugins} != git,personal-plugin ]]; then return 21; fi
+typeset -g PERSONAL_PLUGINS_OK=1
+''')
+        self.template.write_bytes((REPO / "zshrc").read_bytes())
+        loader = 'source "$ZSH/oh-my-zsh.sh"\n'
+        baseline = (
+            'export ZSH="${ZSH:-${ZDOTDIR:-$HOME}/.oh-my-zsh}"\n'
+            'export ZSH_CUSTOM="${ZSH_CUSTOM:-$ZSH/custom}"\n'
+            'plugins=()\n'
+            'if [[ -r "$ZSH/plugins/git/git.plugin.zsh" ]]; then\n'
+            '  plugins+=(git)\n'
+            'fi\n'
+            + loader
+        )
+        old = baseline.replace(loader, 'plugins+=(personal-plugin)\n' + loader, 1)
+        (self.target / ".zshrc").write_text(old)
+        (self.state / "templates/zshrc").write_text(baseline)
+        result = self.install()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.shell(r'''
+unset ZSH ZSH_CUSTOM plugins
+ZDOTDIR=$1
+source "$ZDOTDIR/.zshrc"
+[[ $PERSONAL_PLUGINS_OK == 1 ]] || exit 1
+''', self.target)
+
+    def test_changing_only_zsh_recomputes_default_custom_path(self):
+        framework = self.target / "personal-oh-my-zsh"
+        framework.mkdir()
+        (framework / "oh-my-zsh.sh").write_text(r'''
+if [[ $ZSH_CUSTOM != "$ZSH/custom" ]]; then return 22; fi
+typeset -g PERSONAL_FRAMEWORK_LOADED=1
+''')
+        self.template.write_bytes((REPO / "zshrc").read_bytes())
+        default_zsh = 'export ZSH="${ZSH:-${ZDOTDIR:-$HOME}/.oh-my-zsh}"\n'
+        baseline = (
+            default_zsh
+            + 'export ZSH_CUSTOM="${ZSH_CUSTOM:-$ZSH/custom}"\n'
+            + 'source "$ZSH/oh-my-zsh.sh"\n'
+        )
+        old = baseline.replace(default_zsh, "export ZSH=" + shlex.quote(str(framework)) + "\n", 1)
+        (self.target / ".zshrc").write_text(old)
+        (self.state / "templates/zshrc").write_text(baseline)
+        result = self.install()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.shell(r'''
+unset ZSH ZSH_CUSTOM
+ZDOTDIR=$1
+source "$ZDOTDIR/.zshrc"
+[[ $PERSONAL_FRAMEWORK_LOADED == 1 ]] || exit 1
+''', self.target)
+
     def test_recovery_from_explicit_backup_preserves_local_and_is_repeatable(self):
         self.recovery_fixture()
         backup = self.state / "backup-20000101T000000Z.directory with spaces"

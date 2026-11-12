@@ -40,6 +40,11 @@ HISTSIZE=50000
 SAVEHIST=50000
 setopt SHARE_HISTORY HIST_IGNORE_DUPS HIST_IGNORE_SPACE HIST_REDUCE_BLANKS HIST_VERIFY
 
+export ZSH="${ZSH:-${ZDOTDIR:-$HOME}/.oh-my-zsh}"
+export ZSH_CUSTOM="${ZSH_CUSTOM:-$ZSH/custom}"
+_my_configs_initial_zsh=$ZSH
+_my_configs_initial_zsh_custom=$ZSH_CUSTOM
+
 # Migrated initialization precedes framework/plugin selection. Existing local
 # files without this header retain their original, late-only loading behavior.
 _my_configs_local_file="${ZDOTDIR:-$HOME}/.zshrc.local"
@@ -49,12 +54,13 @@ if [[ -r "$_my_configs_local_file" ]]; then
     _MY_CONFIGS_LOCAL_PHASE=early
     source "$_my_configs_local_file"
     unset _MY_CONFIGS_LOCAL_PHASE
+    if [[ "$ZSH" != "$_my_configs_initial_zsh" && "$ZSH_CUSTOM" == "$_my_configs_initial_zsh_custom" ]]; then
+      export ZSH_CUSTOM="$ZSH/custom"
+    fi
   fi
   unset _my_configs_local_header
 fi
-
-export ZSH="${ZSH:-${ZDOTDIR:-$HOME}/.oh-my-zsh}"
-export ZSH_CUSTOM="${ZSH_CUSTOM:-$ZSH/custom}"
+unset _my_configs_initial_zsh _my_configs_initial_zsh_custom
 # The installer updates its own pinned checkout via setup.sh --update. Leave
 # independently installed Oh My Zsh checkouts on their existing update policy.
 if [[ -f "$ZSH/.git/my-configs-owner" ]]; then
