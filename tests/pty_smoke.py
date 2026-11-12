@@ -23,7 +23,7 @@ env.update(
 (target / ".cache").mkdir(exist_ok=True)
 script = r"""
 [[ $HISTFILE == /dev/null && $HISTSIZE == 50000 && $SAVEHIST == 50000 ]] \
-  || { print -u2 'FAIL: history settings'; exit 1; }
+  || { print -u2 -- "FAIL: history settings ($HISTFILE, $HISTSIZE, $SAVEHIST)"; exit 1; }
 (( $+functions[_zsh_autosuggest_start] && $+functions[_zsh_highlight] )) \
   || { print -u2 'FAIL: suggestion/highlight functions'; exit 1; }
 (( $+ZSH_AUTOSUGGEST_USE_ASYNC )) \
@@ -47,8 +47,11 @@ def attach_terminal():
 
 
 master, slave = pty.openpty()
+# Host-wide CI startup scripts can reset HISTFILE (macOS) or prompt in an
+# independent compinit (Ubuntu). Load the installed user configuration only;
+# its Oh My Zsh completion-security checks remain enabled.
 proc = subprocess.Popen(
-    ["zsh", "-i", "-c", script],
+    ["zsh", "-d", "-i", "-c", script],
     stdin=slave, stdout=slave, stderr=slave, env=env,
     preexec_fn=attach_terminal, close_fds=True,
 )
