@@ -57,4 +57,68 @@ fi
 "$MISE_DATA_DIR/shims/ansible" --version
 test ! -e "$MISE_DATA_DIR/shims/python"
 test ! -e "$MISE_DATA_DIR/shims/python3"
+
+# Inject one real-CLI-boundary failure without relying on an upstream outage.
+# Other mise operations and the remaining installed tools stay real.
+export MY_CONFIGS_REAL_MISE
+MY_CONFIGS_REAL_MISE=$(command -v mise)
+terraform_executable=$(mise which terraform)
+python3 - "$target" "$terraform_executable" <<'PY'
+from pathlib import Path
+import sys
+root = Path(sys.argv[1]).resolve()
+executable = Path(sys.argv[2])
+executable.resolve(strict=True).relative_to(root)
+assert executable.is_file()
+PY
+cp -pP "$terraform_executable" "$fixture/terraform-before-404"
+rm "$terraform_executable"
+mkdir -p "$fixture/fault-bin"
+cat > "$fixture/fault-bin/mise" <<'FAULT'
+#!/bin/sh
+# mise may link generated shims to the wrapper found in PATH. Preserve that
+# dispatch contract instead of turning `kubectl version` into `mise version`.
+if [ "${0##*/}" != mise ]; then
+  exec "$MY_CONFIGS_REAL_MISE" exec -- "${0##*/}" "$@"
+fi
+if [ "${MY_CONFIGS_INJECT_404:-0}" = 1 ] && [ "${1:-}" = install ]; then
+  for argument do
+    case "$argument" in
+      terraform|terraform@*)
+        printf '%s\n' 'mise ERROR Failed to install aqua:hashicorp/terraform: HTTP status client error (404 Not Found) for url (https://example.invalid/terraform.zip)' >&2
+        exit 1
+        ;;
+    esac
+  done
+fi
+exec "$MY_CONFIGS_REAL_MISE" "$@"
+FAULT
+chmod +x "$fixture/fault-bin/mise"
+export PATH="$fixture/fault-bin:$PATH"
+export MY_CONFIGS_INJECT_404=1
+"$BASH" "$repo/scripts/devops.sh" --skip-packages --target-dir "$target" > "$fixture/404.log" 2>&1
+grep -qi 'warning' "$fixture/404.log"
+grep -q '404' "$fixture/404.log"
+if "$BASH" "$repo/scripts/devops.sh" --check --target-dir "$target" > "$fixture/404-check.log" 2>&1; then
+  printf '%s\n' 'Incomplete HTTP 404 install incorrectly passed --check' >&2
+  exit 1
+fi
+test ! -e "$MISE_DATA_DIR/shims/terraform"
+test ! -L "$MISE_DATA_DIR/shims/terraform"
+for command in kubectl helm kubecolor terragrunt ansible; do
+  test -x "$MISE_DATA_DIR/shims/$command"
+done
+"$MISE_DATA_DIR/shims/kubectl" version --client
+"$MISE_DATA_DIR/shims/helm" version --short
+"$MISE_DATA_DIR/shims/ansible" --version
+printf '%s\n' 'HTTP 404 warned and continued; incomplete profile and remaining CLIs verified'
+
+# Recovered availability completes the profile on the next ordinary run.
+unset MY_CONFIGS_INJECT_404
+cp -pP "$fixture/terraform-before-404" "$terraform_executable"
+"$BASH" "$repo/scripts/devops.sh" --skip-packages --target-dir "$target"
+"$BASH" "$repo/scripts/devops.sh" --check --target-dir "$target"
+python3 "$repo/tests/snapshot_tree.py" capture "$target" "$fixture/after-recovery.json"
+"$BASH" "$repo/scripts/devops.sh" --skip-packages --target-dir "$target"
+python3 "$repo/tests/snapshot_tree.py" check "$target" "$fixture/after-recovery.json"
 printf '%s\n' 'DevOps CLI installation and pinned repeatability OK'

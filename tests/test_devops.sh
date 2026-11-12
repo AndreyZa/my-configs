@@ -59,6 +59,25 @@ def location(name):
     version = value['version'] if isinstance(value, dict) else value
     return data / 'installs' / tool.replace(':', '-') / version / 'bin' / name
 
+def fail_requested(tool, phase):
+    if os.environ.get('FAKE_FAIL_TOOL') != tool or os.environ.get('FAKE_FAILURE_PHASE', 'install') != phase:
+        return
+    kind = os.environ.get('FAKE_FAILURE_KIND', '404')
+    prefix = 'mise ERROR Failed to install aqua:' + tool + '@1.0.0: '
+    if kind in ('404', '403', '500'):
+        status = {'404': ('client', 'Not Found'), '403': ('client', 'Forbidden'), '500': ('server', 'Internal Server Error')}[kind]
+        print(prefix + 'HTTP status ' + status[0] + ' error (' + kind + ' ' + status[1] + ') for url (https://example.invalid/release)', file=sys.stderr)
+    elif kind == 'checksum':
+        print('mise ERROR checksum mismatch for downloaded archive', file=sys.stderr)
+    elif kind == 'mixed':
+        print(prefix + 'HTTP status client error (404 Not Found) for url (https://example.invalid/release)', file=sys.stderr)
+        print('mise ERROR checksum verification failed', file=sys.stderr)
+    else:
+        print('mise ERROR connection timed out for https://example.invalid/build-404', file=sys.stderr)
+    print('mise ERROR Version: 2026.11.7 linux-x64', file=sys.stderr)
+    print('mise ERROR Run with --verbose for more information', file=sys.stderr)
+    sys.exit(7)
+
 def create_shim(name):
     shims.mkdir(parents=True, exist_ok=True)
     destination = shims / name
@@ -67,6 +86,7 @@ def create_shim(name):
     destination.symlink_to(os.environ['FAKE_MISE_REAL'])
 
 if args[0] == 'latest':
+    fail_requested(args[1].split('@')[0], 'latest')
     print(os.environ.get('FAKE_LATEST_VERSION', '1.0.0'))
 elif args[:2] == ['config', 'get']:
     name, field = parse_key(args[-1])
@@ -95,9 +115,18 @@ elif args[:2] == ['config', 'set']:
     else:
         lines.append(replacement)
     profile.write_text('\n'.join(lines) + '\n')
+elif args[0] == 'use' and '--remove' in args:
+    tool = args[args.index('--remove') + 1]
+    lines = [line for line in profile.read_text().splitlines()
+             if not re.match(r'^("' + re.escape(tool) + r'"|' + re.escape(tool) + r')\s*=', line)]
+    profile.write_text('\n'.join(lines) + '\n')
 elif args[0] == 'install':
     force = '--force' in args
     for tool in [arg for arg in args[1:] if not arg.startswith('-')]:
+        # Simulate an automatically-created shim before a download fails.
+        if os.environ.get('FAKE_FAIL_TOOL') == tool:
+            create_shim(names(tool)[0])
+        fail_requested(tool, 'install')
         for name in names(tool):
             executable = location(name)
             if force or not executable.exists():
@@ -125,6 +154,8 @@ chmod +x "$BIN/mise"
 run_profile() {
   env PATH="$BIN:/usr/bin:/bin" FAKE_LOG="$LOG" FAKE_INSTALL_FAIL="${FAKE_INSTALL_FAIL:-0}" \
     FAKE_LATEST_VERSION="${FAKE_LATEST_VERSION:-1.0.0}" FAKE_PYTHON="$PYTHON_BIN" \
+    FAKE_FAIL_TOOL="${FAKE_FAIL_TOOL:-}" FAKE_FAILURE_KIND="${FAKE_FAILURE_KIND:-404}" \
+    FAKE_FAILURE_PHASE="${FAKE_FAILURE_PHASE:-install}" \
     FAKE_MISE_MODEL="$FIXTURE/mise-model.py" FAKE_MISE_REAL="$BIN/mise" \
     FAKE_LIVE_PROFILE="$TARGET/.config/mise/conf.d/my-configs-devops.toml" \
     "$BASH_BIN" "$ROOT/scripts/devops.sh" --target-dir "$TARGET" --skip-packages "$@"
@@ -255,6 +286,106 @@ printf 'foreign lock\n' > "$TARGET/.config/mise/mise.lock"
 if run_profile --update > "$FIXTURE/output" 2>&1; then fail 'foreign global lock accepted'; fi
 cmp -s "$TARGET/.config/mise/config.toml" "$FIXTURE/user-config" || fail 'foreign global config changed'
 cmp -s "$TARGET/.config/mise/conf.d/user.toml" "$FIXTURE/user-fragment" || fail 'foreign fragment changed'
+
+# A confirmed HTTP 404 is optional, but produces an explicitly partial profile.
+TARGET="$FIXTURE/http404-fresh"
+: > "$LOG"
+FAKE_FAIL_TOOL=terraform run_profile > "$FIXTURE/output" 2>&1
+grep -q 'WARNING: terraform: HTTP 404' "$FIXTURE/output" || fail '404 warning missing'
+[ ! -e "$TARGET/.local/share/mise/shims/terraform" ] || fail '404 exposed a broken Terraform shim'
+if grep -q '^"terraform"' "$TARGET/.config/mise/conf.d/my-configs-devops.toml"; then fail 'unavailable tool stayed selected'; fi
+for name in kubectl helm kubecolor terragrunt uv ansible ansible-playbook; do
+  [ -x "$TARGET/.local/share/mise/shims/$name" ] || fail "404 prevented $name installation"
+done
+if run_profile --check > "$FIXTURE/output" 2>&1; then fail 'partial profile reported healthy'; fi
+grep -q 'Missing terraform:' "$FIXTURE/output" || fail '--check did not name the missing CLI'
+# Persistent 404 is tried once; healthy tools are never reinstalled or resolved.
+: > "$LOG"
+FAKE_FAIL_TOOL=terraform run_profile > "$FIXTURE/output" 2>&1
+[ "$(grep -c '^install ' "$LOG")" -eq 1 ] || fail 'partial repeat installed more than the missing tool'
+grep -q '^install --force terraform$' "$LOG" || fail 'partial repeat skipped missing Terraform'
+[ "$(grep -c '^latest ' "$LOG")" -eq 1 ] || fail 'partial repeat resolved healthy tools'
+: > "$LOG"
+run_profile > "$FIXTURE/output"
+[ "$(grep -c '^install ' "$LOG")" -eq 1 ] || fail 'recovery installed healthy tools'
+run_profile --check > "$FIXTURE/output"
+cp "$LOG" "$FIXTURE/recovered-log"
+run_profile > "$FIXTURE/output"
+cmp -s "$LOG" "$FIXTURE/recovered-log" || fail 'recovered full profile lost no-op'
+
+# Version resolution can also fail with 404; never attempt installation afterwards.
+TARGET="$FIXTURE/http404-latest"
+: > "$LOG"
+FAKE_FAIL_TOOL=terraform FAKE_FAILURE_PHASE=latest run_profile > "$FIXTURE/output" 2>&1
+if grep -Eq '^install( --force)? terraform$' "$LOG"; then fail 'attempted install after resolver 404'; fi
+[ -x "$TARGET/.local/share/mise/shims/ansible" ] || fail 'resolver 404 stopped later tools'
+if run_profile --check > "$FIXTURE/output" 2>&1; then fail 'resolver 404 profile reported healthy'; fi
+
+# A foreign shim must survive; only unchanged shims owned by our manifest are removed.
+TARGET="$FIXTURE/http404-foreign"
+mkdir -p "$TARGET/.local/share/mise/shims"
+printf '#!/bin/sh\nexit 42\n' > "$TARGET/.local/share/mise/shims/terraform"
+chmod +x "$TARGET/.local/share/mise/shims/terraform"
+cp "$TARGET/.local/share/mise/shims/terraform" "$FIXTURE/foreign-terraform"
+FAKE_FAIL_TOOL=terraform run_profile > "$FIXTURE/output" 2>&1
+cmp -s "$TARGET/.local/share/mise/shims/terraform" "$FIXTURE/foreign-terraform" || fail '404 deleted/replaced a foreign shim'
+TARGET="$FIXTURE/http404-owned"
+run_profile > "$FIXTURE/output"
+owned_manifest="$TARGET/.local/state/my-configs/devops-executables.tsv"
+owned_executable=$(awk -F '\t' '$1 == "exe:terraform" {print $2}' "$owned_manifest")
+rm "$owned_executable"
+FAKE_FAIL_TOOL=terraform run_profile > "$FIXTURE/output" 2>&1
+[ ! -e "$TARGET/.local/share/mise/shims/terraform" ] || fail '404 retained an owned broken shim'
+if run_profile --check > "$FIXTURE/output" 2>&1; then fail 'owned missing tool reported healthy'; fi
+run_profile > "$FIXTURE/output"
+run_profile --check > "$FIXTURE/output"
+
+# An update's 404 keeps a healthy previous version while other tools move forward.
+TARGET="$FIXTURE/http404-update"
+run_profile > "$FIXTURE/output"
+old_terraform=$(awk -F '\t' '$1 == "exe:terraform" {print $2}' "$TARGET/.local/state/my-configs/devops-executables.tsv")
+FAKE_FAIL_TOOL=terraform FAKE_LATEST_VERSION=2.0.0 run_profile --update > "$FIXTURE/output" 2>&1
+grep -q 'keeping installed version 1.0.0' "$FIXTURE/output" || fail 'old-version fallback warning missing'
+update_profile="$TARGET/.config/mise/conf.d/my-configs-devops.toml"
+grep -q '^"terraform" = "1.0.0"$' "$update_profile" || fail '404 replaced the working Terraform version'
+grep -q '^"terragrunt" = "2.0.0"$' "$update_profile" || fail '404 rolled back a successful later update'
+[ -x "$old_terraform" ] || fail '404 destroyed the previous Terraform executable'
+run_profile --check > "$FIXTURE/output"
+
+# Without uv, do not enter Ansible installation or retry it indefinitely.
+TARGET="$FIXTURE/http404-uv"
+: > "$LOG"
+FAKE_FAIL_TOOL=uv run_profile > "$FIXTURE/output" 2>&1
+if grep -E '^install .*pipx:ansible-core|^latest pipx:ansible-core' "$LOG" >/dev/null; then fail 'Ansible attempted without uv'; fi
+[ ! -e "$TARGET/.local/share/mise/shims/uv" ] || fail '404 uv shim published'
+[ ! -e "$TARGET/.local/share/mise/shims/ansible" ] || fail 'Ansible shim published without uv'
+[ -x "$TARGET/.local/share/mise/shims/terraform" ] || fail 'uv failure stopped independent tools'
+if run_profile --check > "$FIXTURE/output" 2>&1; then fail 'missing uv/Ansible reported healthy'; fi
+: > "$LOG"
+run_profile > "$FIXTURE/output"
+[ "$(grep -c '^install ' "$LOG")" -eq 2 ] || fail 'uv recovery reinstalled independent tools'
+run_profile --check > "$FIXTURE/output"
+
+# HTTP 403/500, integrity errors and unrelated text containing 404 remain fatal.
+for kind in 403 500 checksum mixed timeout; do
+  TARGET="$FIXTURE/fatal-$kind"
+  if FAKE_FAIL_TOOL=terraform FAKE_FAILURE_KIND="$kind" run_profile > "$FIXTURE/output" 2>&1; then fail "$kind was ignored"; fi
+  [ ! -e "$TARGET/.config/mise/conf.d/my-configs-devops.toml" ] || fail "$kind exposed a partial live profile"
+  [ ! -e "$TARGET/.local/share/mise/shims" ] || fail "$kind exposed live shims"
+done
+# A failed tee/log write must be fatal even if the complete text mentions 404.
+TARGET="$FIXTURE/http404-owned"
+owned_executable=$(awk -F '\t' '$1 == "exe:terraform" {print $2}' "$TARGET/.local/state/my-configs/devops-executables.tsv")
+rm "$owned_executable"
+cat > "$BIN/tee" <<'EOF'
+#!/bin/sh
+/usr/bin/tee "$@"
+exit 9
+EOF
+chmod +x "$BIN/tee"
+if FAKE_FAIL_TOOL=terraform run_profile > "$FIXTURE/output" 2>&1; then fail 'tee failure was ignored'; fi
+grep -q 'cannot save the complete mise download log' "$FIXTURE/output" || fail 'tee failure was not distinguished'
+rm "$BIN/tee"
 
 # APT/Homebrew dispatch remains covered without invoking real package managers.
 if [ ! -x /opt/homebrew/bin/mise ] && [ ! -x /usr/local/bin/mise ] && [ ! -x /usr/bin/mise ]; then
