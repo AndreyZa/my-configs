@@ -1,0 +1,12 @@
+{
+    "actions": [
+        {
+            "command": { "action": "sendInput", "input": "\u001b\u0006" },
+            "id": "User.FzfFileSearch",
+            "name": "Поиск файлов в терминале"
+        }
+    ],
+    "keybindings": [
+        { "id": "User.FzfFileSearch", "keys": "ctrl+alt+f" }
+    ]
+}

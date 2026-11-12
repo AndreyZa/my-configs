@@ -1,0 +1,52 @@
+name: Validate environment
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: validate-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  terminal:
+    name: Terminal / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15, macos-15-intel]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install test prerequisites (Ubuntu)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y zsh git curl fontconfig python3 shellcheck
+      - name: Install test prerequisites (macOS)
+        if: runner.os == 'macOS'
+        run: brew install zsh git curl shellcheck
+      - name: Static checks
+        run: |
+          for script in setup.sh lib/bootstrap.sh scripts/devops.sh tests/*.sh; do bash -n "$script"; done
+          for script in zshrc p10k.zsh; do zsh -n "$script"; done
+          shellcheck -x setup.sh lib/bootstrap.sh scripts/devops.sh tests/*.sh
+      - name: Regression checks
+        run: |
+          bash tests/test_bootstrap.sh
+          bash tests/test_devops.sh
+          bash tests/smoke_zsh.sh
+      - name: Real installation and repeatability
+        run: bash tests/integration.sh
+      - name: Real DevOps profile installation
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: bash tests/integration_devops.sh
