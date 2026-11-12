@@ -294,6 +294,7 @@ tool_available() {
   for name in "${COMMANDS[@]}"; do
     if [ "${TOOL_IDS[$index]}" = "$1" ]; then
       executable=$(mise_run which "$name" 2>/dev/null || true)
+      if [ -f "$executable" ] && [ ! -x "$executable" ]; then chmod +x "$executable"; fi
       if [ ! -f "$executable" ] || [ ! -x "$executable" ]; then return 1; fi
     fi
     index=$((index + 1))

@@ -133,6 +133,8 @@ elif args[0] == 'install':
                 executable.parent.mkdir(parents=True, exist_ok=True)
                 executable.write_text('#!/bin/sh\nprintf "' + name + '\\n"\n')
                 executable.chmod(0o755)
+                if os.environ.get('FAKE_NONEXEC_TOOL') == tool:
+                    executable.chmod(0o644)
             create_shim(name)
         if os.environ.get('FAKE_INSTALL_FAIL') == '1':
             sys.exit(7)
@@ -155,7 +157,7 @@ run_profile() {
   env PATH="$BIN:/usr/bin:/bin" FAKE_LOG="$LOG" FAKE_INSTALL_FAIL="${FAKE_INSTALL_FAIL:-0}" \
     FAKE_LATEST_VERSION="${FAKE_LATEST_VERSION:-1.0.0}" FAKE_PYTHON="$PYTHON_BIN" \
     FAKE_FAIL_TOOL="${FAKE_FAIL_TOOL:-}" FAKE_FAILURE_KIND="${FAKE_FAILURE_KIND:-404}" \
-    FAKE_FAILURE_PHASE="${FAKE_FAILURE_PHASE:-install}" \
+    FAKE_FAILURE_PHASE="${FAKE_FAILURE_PHASE:-install}" FAKE_NONEXEC_TOOL="${FAKE_NONEXEC_TOOL:-}" \
     FAKE_MISE_MODEL="$FIXTURE/mise-model.py" FAKE_MISE_REAL="$BIN/mise" \
     FAKE_LIVE_PROFILE="$TARGET/.config/mise/conf.d/my-configs-devops.toml" \
     "$BASH_BIN" "$ROOT/scripts/devops.sh" --target-dir "$TARGET" --skip-packages "$@"
@@ -364,6 +366,13 @@ if run_profile --check > "$FIXTURE/output" 2>&1; then fail 'missing uv/Ansible r
 : > "$LOG"
 run_profile > "$FIXTURE/output"
 [ "$(grep -c '^install ' "$LOG")" -eq 2 ] || fail 'uv recovery reinstalled independent tools'
+run_profile --check > "$FIXTURE/output"
+
+# Release archives can contain a regular binary without its executable bit.
+TARGET="$FIXTURE/nonexec-terragrunt"
+FAKE_NONEXEC_TOOL=terragrunt run_profile > "$FIXTURE/output"
+nonexec_executable=$(awk -F '\t' '$1 == "exe:terragrunt" {print $2}' "$TARGET/.local/state/my-configs/devops-executables.tsv")
+[ -x "$nonexec_executable" ] || fail 'non-executable Terragrunt was not repaired'
 run_profile --check > "$FIXTURE/output"
 
 # HTTP 403/500, integrity errors and unrelated text containing 404 remain fatal.
