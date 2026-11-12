@@ -169,7 +169,7 @@ mkdir -p "$COPY/lib" "$COPY/scripts" "$FORWARD_TARGET"
 cp "$TEST_ROOT/setup.sh" "$COPY/setup.sh"
 cp "$TEST_ROOT/lib/bootstrap.sh" "$COPY/lib/bootstrap.sh"
 # This test isolates argument forwarding from package availability.
-printf '\nmc_require_commands() { :; }\nmc_install_fzf() { :; }\n' >> "$COPY/lib/bootstrap.sh"
+printf '\nmc_require_commands() { :; }\nmc_install_fzf() { :; }\nmc_install_packages() { echo unexpected-package-install >&2; return 1; }\nmc_install_fonts() { echo unexpected-font-install >&2; return 1; }\n' >> "$COPY/lib/bootstrap.sh"
 printf '# minimal test configuration\n' > "$COPY/zshrc"
 cp "$COPY/zshrc" "$COPY/p10k.zsh"
 while IFS='|' read -r name relative url ref commit entry; do
@@ -188,6 +188,7 @@ pass '--skip-packages is forwarded to the optional profile'
 # The doctor must reject modified or stale managed dependencies.
 (
   MC_TARGET="$TEST_TMP/doctor"
+  MC_STATE="$MC_TARGET/.local/state/my-configs"
   MC_NO_FONTS=1
   mkdir -p "$MC_TARGET"
   printf '# valid config\n' > "$MC_TARGET/.zshrc"
@@ -415,4 +416,151 @@ pass 'font-cache refresh is change-driven and retries after a failed rebuild'
   [[ $(wc -l < "$MC_TEST_GSET_LOG") -eq 2 ]]
 )
 pass 'desktop font settings compare current values before writing changes'
+
+
+# Prepared candidates are durable review artifacts; edits and symlinks must survive.
+(
+  MC_TARGET="$TEST_TMP/activation-user"
+  MC_STATE="$MC_TARGET/.local/state/my-configs"
+  MC_REPLACE=0 MC_CONFLICTS=0 MC_BACKUP_DIR=''
+  mkdir -p "$MC_TARGET" "$MC_STATE/templates"
+  printf '# current user configuration\n' > "$MC_TARGET/.zshrc"
+  printf '# prepared configuration\n' > "$TEST_TMP/activation-source"
+  mc_install_config "$TEST_TMP/activation-source" "$MC_TARGET/.zshrc" zshrc
+  mc_config_is_pending "$MC_TARGET/.zshrc" zshrc
+  printf '# draft written by the user\n' >> "$MC_TARGET/.zshrc.my-configs-new"
+  cp "$MC_TARGET/.zshrc.my-configs-new" "$TEST_TMP/user-draft"
+  mc_install_config "$TEST_TMP/activation-source" "$MC_TARGET/.zshrc" zshrc
+  prepared=$(mc_pending_candidate "$MC_TARGET/.zshrc" zshrc)
+  [[ "$prepared" != "$MC_TARGET/.zshrc.my-configs-new" ]]
+  assert_same "$TEST_TMP/activation-source" "$prepared"
+  assert_same "$TEST_TMP/user-draft" "$MC_TARGET/.zshrc.my-configs-new"
+  mc_install_config "$TEST_TMP/activation-source" "$MC_TARGET/.zshrc" zshrc
+  [[ "$prepared" == "$(mc_pending_candidate "$MC_TARGET/.zshrc" zshrc)" ]]
+  MC_REPLACE=1
+  mc_install_config "$TEST_TMP/activation-source" "$MC_TARGET/.zshrc" zshrc
+  [[ ! -e "$prepared" && ! -e "$MC_STATE/pending/zshrc" ]]
+  assert_same "$TEST_TMP/activation-source" "$MC_TARGET/.zshrc"
+  assert_same "$TEST_TMP/user-draft" "$MC_TARGET/.zshrc.my-configs-new"
+  if mc_config_is_pending "$MC_TARGET/.zshrc" zshrc; then exit 1; fi
+  printf '# external candidate draft\n' > "$TEST_TMP/linked-draft"
+  ln -s "$TEST_TMP/linked-draft" "$MC_TARGET/.p10k.zsh.my-configs-new"
+  mc_install_config "$TEST_TMP/activation-source" "$MC_TARGET/.p10k.zsh" p10k.zsh
+  [[ -L "$MC_TARGET/.p10k.zsh.my-configs-new" ]]
+  grep -q 'external candidate draft' "$TEST_TMP/linked-draft"
+  cp "$TEST_TMP/activation-source" "$MC_TARGET/.linked.my-configs-new"
+  ln -s "$MC_TARGET/.linked.my-configs-new" "$MC_TARGET/.linked"
+  mc_install_config "$TEST_TMP/activation-source" "$MC_TARGET/.linked" linked
+  [[ -L "$MC_TARGET/.linked" && -f "$MC_TARGET/.linked.my-configs-new" ]]
+)
+pass 'activation cleans matching candidates while preserving edited drafts and symlinks'
+
+# An active symlink still needs a baseline when an edited draft outlives its marker.
+(
+  MC_TARGET="$TEST_TMP/activation-identical-symlink"
+  MC_STATE="$MC_TARGET/.local/state/my-configs"
+  MC_REPLACE=0 MC_CONFLICTS=0 MC_BACKUP_DIR=''
+  mkdir -p "$MC_TARGET" "$MC_STATE/templates"
+  printf '# repository configuration\n' > "$TEST_TMP/identical-symlink-source"
+  printf '# current user configuration\n' > "$MC_TARGET/.zshrc"
+  mc_install_config "$TEST_TMP/identical-symlink-source" "$MC_TARGET/.zshrc" zshrc
+  printf '# edited draft\n' >> "$MC_TARGET/.zshrc.my-configs-new"
+  rm "$MC_TARGET/.zshrc"
+  ln -s "$TEST_TMP/identical-symlink-source" "$MC_TARGET/.zshrc"
+  MC_CONFLICTS=0
+  mc_install_config "$TEST_TMP/identical-symlink-source" "$MC_TARGET/.zshrc" zshrc
+  [[ -L "$MC_TARGET/.zshrc" && $MC_CONFLICTS -eq 0 ]]
+  [[ ! -e "$MC_STATE/pending/zshrc" ]]
+  assert_same "$TEST_TMP/identical-symlink-source" "$MC_STATE/templates/zshrc"
+  grep -q 'edited draft' "$MC_TARGET/.zshrc.my-configs-new"
+  if mc_config_is_pending "$MC_TARGET/.zshrc" zshrc; then exit 1; fi
+)
+pass 'identical symlink records a baseline and clears stale pending state'
+
+# Atomic replacement targets the symlink itself, never the referenced directory.
+(
+  MC_TARGET="$TEST_TMP/atomic-directory-symlink"
+  MC_STATE="$MC_TARGET/.local/state/my-configs"
+  MC_REPLACE=1 MC_CONFLICTS=0 MC_BACKUP_DIR=''
+  mkdir -p "$MC_TARGET" "$MC_STATE/templates" "$TEST_TMP/atomic-actual-directory"
+  printf '# repository configuration\n' > "$TEST_TMP/atomic-source"
+  ln -s "$TEST_TMP/atomic-actual-directory" "$MC_TARGET/.zshrc"
+  mc_install_config "$TEST_TMP/atomic-source" "$MC_TARGET/.zshrc" zshrc
+  [[ ! -L "$MC_TARGET/.zshrc" && -f "$MC_TARGET/.zshrc" ]]
+  assert_same "$TEST_TMP/atomic-source" "$MC_TARGET/.zshrc"
+  [[ -L "$MC_BACKUP_DIR/zshrc" ]]
+  [[ $(readlink "$MC_BACKUP_DIR/zshrc") == "$TEST_TMP/atomic-actual-directory" ]]
+  [[ -z $(find "$TEST_TMP/atomic-actual-directory" -mindepth 1 -print -quit) ]]
+)
+pass 'atomic copy replaces a directory symlink without entering its target'
+
+# A pending configuration is not a successful doctor result, including legacy
+# candidates created before pending-state markers existed.
+(
+  MC_TARGET="$TEST_TMP/pending-doctor"
+  MC_STATE="$MC_TARGET/.local/state/my-configs"
+  MC_NO_FONTS=1 MC_REPLACE=0 MC_CONFLICTS=0 MC_BACKUP_DIR=''
+  mkdir -p "$MC_TARGET" "$MC_STATE/templates"
+  printf '# active old config\n' > "$MC_TARGET/.zshrc"
+  cp "$MC_TARGET/.zshrc" "$MC_TARGET/.p10k.zsh"
+  printf '# new candidate\n' > "$MC_TARGET/.zshrc.my-configs-new"
+  mc_sources() { :; }
+  mc_check_fzf() { :; }
+  if mc_check_installation >"$TEST_TMP/pending-check.log" 2>&1; then exit 1; fi
+  grep -q 'prepared but not activated' "$TEST_TMP/pending-check.log"
+  mc_install_config "$TEST_TMP/activation-source" "$MC_TARGET/.zshrc" zshrc
+  if mc_check_installation >"$TEST_TMP/pending-check.log" 2>&1; then exit 1; fi
+  grep -q 'prepared but not activated' "$TEST_TMP/pending-check.log"
+  MC_REPLACE=1
+  mc_install_config "$TEST_TMP/activation-source" "$MC_TARGET/.zshrc" zshrc
+  mc_check_installation >"$TEST_TMP/activated-check.log"
+)
+pass 'doctor rejects prepared configurations until they are activated'
+
+# A noninteractive run keeps the old config and prints a usable, quoted command
+# carrying the target and skip flags. Executing that explicit command activates it.
+ACTIVATION_COPY="$TEST_TMP/installer with spaces"
+mv "$COPY" "$ACTIVATION_COPY"
+printf '# local customization\n' >> "$FORWARD_TARGET/.zshrc"
+cp "$FORWARD_TARGET/.zshrc" "$TEST_TMP/before-nontty"
+MC_TEST_DEVOPS_ARGS="$TEST_TMP/devops-args" "$BASH" "$ACTIVATION_COPY/setup.sh" \
+  --skip-packages --no-fonts --no-chsh --devops --target-dir "$FORWARD_TARGET" \
+  </dev/null >"$TEST_TMP/activation-output" 2>&1
+assert_same "$TEST_TMP/before-nontty" "$FORWARD_TARGET/.zshrc"
+grep -q 'Настройки подготовлены, но не включены' "$TEST_TMP/activation-output"
+if grep -Eq 'Installation completed|Выбор' "$TEST_TMP/activation-output"; then exit 1; fi
+activation_command=$(grep '^bash ' "$TEST_TMP/activation-output")
+[[ "$activation_command" == *--replace-config* && "$activation_command" == *--target-dir* \
+  && "$activation_command" == *--skip-packages* && "$activation_command" == *--no-fonts* \
+  && "$activation_command" == *--no-chsh* && "$activation_command" == *--devops* ]]
+MC_TEST_DEVOPS_ARGS="$TEST_TMP/devops-args" "$BASH" -c "$activation_command" \
+  </dev/null >"$TEST_TMP/activation-rerun-output" 2>&1
+assert_same "$ACTIVATION_COPY/zshrc" "$FORWARD_TARGET/.zshrc"
+[[ ! -e "$FORWARD_TARGET/.zshrc.my-configs-new" ]]
+grep -qx -- '--skip-packages' "$TEST_TMP/devops-args"
+pass 'noninteractive preparation prints an executable activation command with preserved flags'
+
+# Editing a candidate while the activation menu is open must not silently apply
+# different repository bytes or replace either active file before validation.
+(
+  MC_TARGET="$TEST_TMP/changed-candidate"
+  MC_STATE="$MC_TARGET/.local/state/my-configs"
+  BOOTSTRAP_ROOT="$TEST_TMP/reviewed-source"
+  MC_REPLACE=0 MC_CONFLICTS=0 MC_BACKUP_DIR=''
+  mkdir -p "$MC_TARGET" "$MC_STATE/templates" "$BOOTSTRAP_ROOT"
+  for key in zshrc p10k.zsh; do
+    printf '# old active config\n' > "$MC_TARGET/.$key"
+    printf '# new prepared config\n' > "$BOOTSTRAP_ROOT/$key"
+    mc_install_config "$BOOTSTRAP_ROOT/$key" "$MC_TARGET/.$key" "$key"
+  done
+  printf '# edited during review\n' >> "$(mc_pending_candidate "$MC_TARGET/.p10k.zsh" p10k.zsh)"
+  if (mc_activate_prepared_configs) >"$TEST_TMP/changed-candidate.log" 2>&1; then exit 1; fi
+  grep -q 'Prepared configuration changed' "$TEST_TMP/changed-candidate.log"
+  grep -qx '# old active config' "$MC_TARGET/.zshrc"
+  grep -qx '# old active config' "$MC_TARGET/.p10k.zsh"
+)
+pass 'activation refuses a changed candidate before replacing any active file'
+
+python3 "$TEST_ROOT/tests/activation_tty.py" "$TEST_ROOT/lib/bootstrap.sh"
+pass 'TTY activation requires an explicit choice and respects noninteractive guards'
 printf '%s total bootstrap regression checks passed\n' "$PASS"

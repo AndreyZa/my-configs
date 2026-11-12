@@ -180,22 +180,166 @@ mc_atomic_copy() {
   stage=$(mktemp "${dest}.tmp.XXXXXX")
   if ! cp "$source" "$stage"; then rm -f "$stage"; return 1; fi
   chmod 600 "$stage"
-  mv -f "$stage" "$dest"
+  # Do not let mv follow a destination symlink into a directory.
+  if [[ -L "$dest" && -d "$dest" ]]; then
+    case "$(uname -s)" in
+      Darwin) mv -f -h "$stage" "$dest" ;;
+      *) mv -f -T "$stage" "$dest" ;;
+    esac
+  else
+    mv -f "$stage" "$dest"
+  fi
+}
+
+# A pending marker records the exact reviewable candidate without rewriting a
+# user's edited *.my-configs-new file. Candidate paths stay beside their dotfile.
+mc_pending_candidate() {
+  local dest=$1 key=$2 candidate suffix marker
+  marker="$MC_STATE/pending/$key"
+  if [[ -f "$marker" && ! -L "$marker" ]]; then
+    candidate=$(cat "$marker")
+    case "$candidate" in
+      "$dest.my-configs-new"|"$dest.my-configs-new."*)
+        suffix=${candidate#"$dest.my-configs-new"}
+        if [[ "$suffix" != */* ]]; then printf '%s\n' "$candidate"; return 0; fi
+        ;;
+    esac
+  fi
+  printf '%s\n' "$dest.my-configs-new"
+}
+
+mc_prepare_config_candidate() {
+  local source=$1 dest=$2 key=$3 candidate marker marker_tmp
+  candidate=$(mc_pending_candidate "$dest" "$key")
+  if [[ -e "$candidate" || -L "$candidate" ]]; then
+    if [[ -L "$candidate" || ! -f "$candidate" ]] || ! cmp -s "$source" "$candidate"; then
+      candidate=$(mktemp "$dest.my-configs-new.XXXXXX")
+    fi
+  fi
+  mc_atomic_copy "$source" "$candidate"
+  marker="$MC_STATE/pending/$key"
+  if [[ ! -f "$marker" || -L "$marker" || $(cat "$marker") != "$candidate" ]]; then
+    mkdir -p "$MC_STATE/pending"
+    marker_tmp=$(mktemp "$MC_STATE/pending/.candidate.XXXXXX")
+    printf '%s\n' "$candidate" > "$marker_tmp"
+    mc_atomic_copy "$marker_tmp" "$marker"
+    rm -f "$marker_tmp"
+  fi
+  printf '%s\n' "$candidate"
+}
+
+mc_clear_applied_candidates() {
+  local source=$1 dest=$2 key=$3 candidate
+  candidate=$(mc_pending_candidate "$dest" "$key")
+  for candidate in "$candidate" "$dest.my-configs-new"; do
+    if [[ -f "$candidate" && ! -L "$candidate" && ! "$dest" -ef "$candidate" ]] \
+      && cmp -s "$source" "$candidate"; then
+      rm -f "$candidate"
+    fi
+  done
+  rm -f "$MC_STATE/pending/$key"
+}
+
+mc_config_is_pending() {
+  local dest=$1 key=$2 candidate
+  candidate=$(mc_pending_candidate "$dest" "$key")
+  if [[ -e "$MC_STATE/pending/$key" || -L "$MC_STATE/pending/$key" ]]; then
+    [[ -f "$candidate" && ! -L "$candidate" && -f "$dest" ]] \
+      && cmp -s "$candidate" "$dest" && return 1
+    return 0
+  fi
+  # Recognize candidates prepared by older installer versions too. A remaining
+  # edited candidate is only a draft when the managed config is already active.
+  [[ -e "$candidate" || -L "$candidate" ]] || return 1
+  if [[ -f "$dest" && -f "$MC_STATE/templates/$key" ]] && cmp -s "$dest" "$MC_STATE/templates/$key"; then return 1; fi
+  [[ -f "$candidate" && ! -L "$candidate" && -f "$dest" ]] \
+    && cmp -s "$candidate" "$dest" && return 1
+  return 0
+}
+
+mc_show_prepared_configs() {
+  local key dest
+  for key in zshrc p10k.zsh; do
+    dest="$MC_TARGET/.$key"
+    if mc_config_is_pending "$dest" "$key"; then
+      printf '  %s\n' "$(mc_pending_candidate "$dest" "$key")"
+    fi
+  done
+}
+
+mc_activate_prepared_configs() {
+  local key dest candidate
+  # The accepted files must still be exactly the versions offered for review.
+  for key in zshrc p10k.zsh; do
+    dest="$MC_TARGET/.$key"
+    if mc_config_is_pending "$dest" "$key"; then
+      candidate=$(mc_pending_candidate "$dest" "$key")
+      if [[ ! -f "$candidate" || -L "$candidate" ]] || ! cmp -s "$BOOTSTRAP_ROOT/$key" "$candidate"; then
+        mc_warn "Prepared configuration changed; rerun setup before activation: $candidate"
+        return 1
+      fi
+    fi
+  done
+  MC_REPLACE=1
+  MC_CONFLICTS=0
+  for key in zshrc p10k.zsh; do
+    dest="$MC_TARGET/.$key"
+    if mc_config_is_pending "$dest" "$key"; then
+      mc_install_config "$BOOTSTRAP_ROOT/$key" "$dest" "$key"
+    elif [[ -f "$dest" ]] && cmp -s "$BOOTSTRAP_ROOT/$key" "$dest"; then
+      mc_clear_applied_candidates "$BOOTSTRAP_ROOT/$key" "$dest" "$key"
+    fi
+  done
+}
+
+mc_offer_activation() {
+  local answer
+  (( MC_CONFLICTS > 0 && ! MC_REPLACE && ! MC_TARGET_EXPLICIT )) || return 0
+  [[ -t 0 && -t 1 && "$MC_TARGET" -ef "$HOME" ]] || return 0
+  mc_log 'Новые настройки подготовлены для просмотра:'
+  mc_show_prepared_configs
+  mc_log '1) Включить новые настройки (сохранить резервную копию текущих)'
+  mc_log '2) Оставить текущие настройки пока как есть'
+  while :; do
+    printf 'Выбор [2]: '
+    IFS= read -r answer || answer=''
+    case "$answer" in
+      1) mc_activate_prepared_configs; return 0 ;;
+      2|'') return 0 ;;
+      *) mc_log 'Введите 1 или 2. Enter оставляет текущие настройки.' ;;
+    esac
+  done
+}
+
+mc_print_activation_command() {
+  local -a args
+  args=(bash "$BOOTSTRAP_ROOT/setup.sh" --replace-config)
+  if (( MC_TARGET_EXPLICIT )); then args+=(--target-dir "$MC_TARGET"); fi
+  if (( MC_SKIP_PACKAGES )); then args+=(--skip-packages); fi
+  if (( MC_NO_FONTS )); then args+=(--no-fonts); fi
+  if (( MC_NO_CHSH )); then args+=(--no-chsh); fi
+  if (( MC_BOOTSTRAP_BREW )); then args+=(--bootstrap-homebrew); fi
+  if (( MC_DEVOPS )); then args+=(--devops); fi
+  if (( MC_UPDATE )); then args+=(--update); fi
+  printf '%q ' "${args[@]}"
+  printf '\n'
 }
 
 mc_install_config() {
-  local source=$1 dest=$2 key=$3 baseline
+  local source=$1 dest=$2 key=$3 baseline candidate
   baseline="$MC_STATE/templates/$key"
   [[ -f "$source" ]] || mc_die "Missing repository configuration: $source"
-  if [[ -f "$dest" && ! -L "$dest" ]] && cmp -s "$source" "$dest"; then
+  if [[ -f "$dest" ]] && cmp -s "$source" "$dest"; then
+    # An identical symlink remains in place; only its state baseline is written.
     mc_atomic_copy "$source" "$baseline"
+    mc_clear_applied_candidates "$source" "$dest" "$key"
     return 0
   fi
   if [[ -e "$dest" || -L "$dest" ]]; then
     if (( ! MC_REPLACE )) && { [[ -L "$dest" || ! -f "$baseline" ]] || ! cmp -s "$baseline" "$dest"; }; then
-      mc_atomic_copy "$source" "$dest.my-configs-new"
+      candidate=$(mc_prepare_config_candidate "$source" "$dest" "$key")
       MC_CONFLICTS=$((MC_CONFLICTS + 1))
-      mc_warn "Preserved $dest; new configuration: $dest.my-configs-new"
+      mc_warn "Preserved $dest; prepared configuration: $candidate"
       return 0
     fi
     if [[ -z "$MC_BACKUP_DIR" ]]; then
@@ -207,6 +351,7 @@ mc_install_config() {
   fi
   mc_atomic_copy "$source" "$dest"
   mc_atomic_copy "$source" "$baseline"
+  mc_clear_applied_candidates "$source" "$dest" "$key"
 }
 
 mc_font_manifest() {
@@ -428,6 +573,9 @@ mc_check_installation() {
     fi
   done < <(mc_sources)
   for name in .zshrc .p10k.zsh; do
+    if mc_config_is_pending "$MC_TARGET/$name" "${name#.}"; then
+      mc_warn "Configuration is prepared but not activated: $MC_TARGET/$name"; missing=1
+    fi
     if [[ ! -r "$MC_TARGET/$name" ]]; then mc_warn "Missing $MC_TARGET/$name"; missing=1
     elif command -v zsh >/dev/null 2>&1; then zsh -n "$MC_TARGET/$name" || missing=1
     fi

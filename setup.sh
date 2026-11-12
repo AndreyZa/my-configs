@@ -24,12 +24,14 @@ Install the terminal environment on Ubuntu/Debian or macOS.
   -h, --help            Show this help
 
 Existing customizations are preserved. Conflicting dotfiles are written as
-*.my-configs-new; review them or rerun with --replace-config.
+*.my-configs-new. In an interactive terminal, choose whether to activate them.
+Otherwise review them and rerun the printed command with --replace-config.
 On a fresh Mac, install Command Line Tools first: xcode-select --install
 HELP
 }
 
 MC_TARGET="$HOME"
+MC_TARGET_EXPLICIT=0
 MC_CHECK=0 MC_UPDATE=0 MC_REPLACE=0 MC_SKIP_PACKAGES=0 MC_NO_FONTS=0 MC_NO_CHSH=0 MC_BOOTSTRAP_BREW=0 MC_DEVOPS=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -43,7 +45,7 @@ while [[ $# -gt 0 ]]; do
     --devops) MC_DEVOPS=1 ;;
     --target-dir)
       [[ $# -ge 2 && -n "$2" ]] || mc_die '--target-dir requires a directory'
-      MC_TARGET=$2; shift ;;
+      MC_TARGET=$2; MC_TARGET_EXPLICIT=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) mc_die "Unknown option: $1" ;;
   esac
@@ -80,22 +82,38 @@ done < <(mc_sources)
 
 if (( ! MC_NO_FONTS )); then
   mc_install_fonts
-  mc_configure_terminal_font
 fi
 mc_install_config "$BOOTSTRAP_ROOT/zshrc" "$MC_TARGET/.zshrc" zshrc
 mc_install_config "$BOOTSTRAP_ROOT/p10k.zsh" "$MC_TARGET/.p10k.zsh" p10k.zsh
-zsh -n "$MC_TARGET/.zshrc"
-zsh -n "$MC_TARGET/.p10k.zsh"
-if (( ! MC_NO_CHSH )); then mc_change_shell; fi
+# Validate the prepared versions before offering activation, even when an old
+# user configuration is incomplete or currently being edited.
+zsh -n "$BOOTSTRAP_ROOT/zshrc"
+zsh -n "$BOOTSTRAP_ROOT/p10k.zsh"
 if (( MC_DEVOPS )); then
   devops_args=(--target-dir "$MC_TARGET")
   if (( MC_UPDATE )); then devops_args+=(--update); fi
   if (( MC_SKIP_PACKAGES )); then devops_args+=(--skip-packages); fi
   "$BASH" "$BOOTSTRAP_ROOT/scripts/devops.sh" "${devops_args[@]}"
 fi
-mc_log 'Installation completed. Open a new terminal.'
+mc_offer_activation
+if (( MC_CONFLICTS )); then
+  mc_log 'Настройки подготовлены, но не включены. Текущие настройки сохранены.'
+  mc_show_prepared_configs
+  mc_log 'После просмотра включить их с резервной копией:'
+  mc_print_activation_command
+else
+  zsh -n "$MC_TARGET/.zshrc"
+  zsh -n "$MC_TARGET/.p10k.zsh"
+  if (( ! MC_NO_FONTS )); then mc_configure_terminal_font; fi
+  if (( ! MC_NO_CHSH )); then mc_change_shell; fi
+  if [[ "$MC_TARGET" -ef "$HOME" ]]; then
+    mc_log 'Настройки включены для новых сеансов zsh.'
+    mc_log 'Откройте новый терминал или выполните в текущем окне: exec zsh'
+  else
+    mc_log "Настройки установлены в отдельный каталог: $MC_TARGET"
+  fi
+fi
 mc_log 'Local additions belong in ~/.zshrc.local; restyle the prompt with p10k configure.'
-if (( MC_CONFLICTS )); then mc_warn 'Existing dotfiles were preserved. Review *.my-configs-new before activation.'; fi
 if [[ -n "$MC_BACKUP_DIR" ]]; then mc_log "Backups: $MC_BACKUP_DIR"; fi
 if [[ "$MC_OS" == Darwin ]] && (( ! MC_NO_FONTS )); then
   mc_log 'In Terminal/iTerm2 select the installed MesloLGS NF font for your profile.'
