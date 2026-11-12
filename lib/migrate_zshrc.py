@@ -116,6 +116,8 @@ def known_source(code):
         return True
     if re.fullmatch(r'(?:~|\$HOME|\$\{HOME\}|\$\{ZDOTDIR:-\$HOME\})/\.(?:p10k\.zsh|zshrc\.local)', argument):
         return True
+    if re.fullmatch(r'(?:~|\$HOME|\$\{HOME\})/powerlevel10k/powerlevel10k\.zsh-theme', argument):
+        return True
     if argument.startswith('${XDG_CACHE_HOME:-$HOME/.cache}/p10k-instant-prompt-') and argument.endswith('.zsh'):
         return True
     if re.fullmatch(r'\$(?:ZSH_CUSTOM|\{ZSH_CUSTOM\})/plugins/(zsh-autosuggestions|zsh-syntax-highlighting)/\1\.zsh', argument):

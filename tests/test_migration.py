@@ -235,6 +235,11 @@ source "$1"
         self.helper("alias second='two'\n", local=edited, success=False)
         self.assertEqual(self.local.read_text(), edited)
 
+    def test_standalone_powerlevel10k_loader_is_not_copied(self):
+        self.helper('source ~/powerlevel10k/powerlevel10k.zsh-theme\nalias personal=kept\n')
+        self.assertNotIn('source ~/powerlevel10k', self.output.read_text())
+        self.load_local('[[ $aliases[personal] == kept ]] || exit 1\n')
+
     def test_loader_guard_side_effect_is_neither_executed_nor_discarded(self):
         marker = self.root / "guard-executed"
         old = ('if [[ -r "$(print guard > ' + shlex.quote(str(marker))
