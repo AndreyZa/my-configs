@@ -3,7 +3,7 @@
 # OS package managers/mise are mocked; this is not a macOS integration test.
 set -euo pipefail
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-BASH_BIN=$(command -v bash)
+BASH_BIN=$BASH
 FIXTURE=$(mktemp -d "${TMPDIR:-/tmp}/my-configs-devops-test.XXXXXX")
 trap 'rm -rf "$FIXTURE"' EXIT
 BIN="$FIXTURE/bin"

@@ -5,11 +5,11 @@ repo=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 fixture=$(mktemp -d "${TMPDIR:-/tmp}/my-configs-devops-integration.XXXXXX")
 trap 'rm -rf "$fixture"' EXIT
 target="$fixture/profile with spaces"
-bash "$repo/scripts/devops.sh" --target-dir "$target"
-bash "$repo/scripts/devops.sh" --check --target-dir "$target"
+"$BASH" "$repo/scripts/devops.sh" --target-dir "$target"
+"$BASH" "$repo/scripts/devops.sh" --check --target-dir "$target"
 profile="$target/.config/mise/conf.d/my-configs-devops.toml"
 cp "$profile" "$fixture/profile.before"
-bash "$repo/scripts/devops.sh" --skip-packages --target-dir "$target"
+"$BASH" "$repo/scripts/devops.sh" --skip-packages --target-dir "$target"
 cmp "$profile" "$fixture/profile.before"
 
 # Resolve only this fixture's tools; HOME and other global/project configs stay intact.

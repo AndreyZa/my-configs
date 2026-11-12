@@ -14,11 +14,11 @@ pass() { PASS=$((PASS + 1)); printf 'ok %s - %s\n' "$PASS" "$1"; }
 assert_same() { cmp -s "$1" "$2" || { printf 'Files differ: %s %s\n' "$1" "$2" >&2; exit 1; }; }
 
 # The checker must not create its target or contact the network.
-if bash "$TEST_ROOT/setup.sh" --check --no-fonts --target-dir "$TEST_TMP/not-created" >"$TEST_TMP/check.log" 2>&1; then
+if "$BASH" "$TEST_ROOT/setup.sh" --check --no-fonts --target-dir "$TEST_TMP/not-created" >"$TEST_TMP/check.log" 2>&1; then
   printf 'Check unexpectedly accepted an empty destination\n' >&2; exit 1
 fi
 [[ ! -e "$TEST_TMP/not-created" ]]
-(cd "$TEST_TMP" && bash "$TEST_ROOT/setup.sh" --help >/dev/null)
+(cd "$TEST_TMP" && "$BASH" "$TEST_ROOT/setup.sh" --help >/dev/null)
 pass 'read-only check and invocation outside the checkout'
 
 MC_TARGET="$TEST_TMP/user files"
@@ -154,7 +154,7 @@ while [[ "$ROOT_PARENT_PATH" != / ]]; do
 done
 ln -s / "$TEST_TMP/root-link"
 for target in "$ROOT_DOT_PATH" "$TEST_TMP/root-link" "$ROOT_MISSING_PATH"; do
-  if bash "$TEST_ROOT/setup.sh" --check --no-fonts --target-dir "$target" >"$TEST_TMP/root-check.log" 2>&1; then
+  if "$BASH" "$TEST_ROOT/setup.sh" --check --no-fonts --target-dir "$target" >"$TEST_TMP/root-check.log" 2>&1; then
     printf 'Root target was accepted: %s\n' "$target" >&2; exit 1
   fi
   grep -q 'Refusing to use /' "$TEST_TMP/root-check.log"
@@ -180,7 +180,7 @@ cat > "$COPY/scripts/devops.sh" <<'DEVOPS'
 #!/usr/bin/env bash
 printf '%s\n' "$@" > "$MC_TEST_DEVOPS_ARGS"
 DEVOPS
-MC_TEST_DEVOPS_ARGS="$TEST_TMP/devops-args" bash "$COPY/setup.sh" \
+MC_TEST_DEVOPS_ARGS="$TEST_TMP/devops-args" "$BASH" "$COPY/setup.sh" \
   --skip-packages --no-fonts --no-chsh --devops --target-dir "$FORWARD_TARGET" >"$TEST_TMP/forward.log"
 grep -qx -- '--skip-packages' "$TEST_TMP/devops-args"
 pass '--skip-packages is forwarded to the optional profile'

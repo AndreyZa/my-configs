@@ -64,7 +64,7 @@ if [[ "$MC_TARGET" != "$HOME" ]]; then MC_NO_CHSH=1; fi
 
 if (( MC_CHECK )); then
   mc_check_installation
-  if (( MC_DEVOPS )); then bash "$BOOTSTRAP_ROOT/scripts/devops.sh" --check --target-dir "$MC_TARGET"; fi
+  if (( MC_DEVOPS )); then "$BASH" "$BOOTSTRAP_ROOT/scripts/devops.sh" --check --target-dir "$MC_TARGET"; fi
   exit 0
 fi
 
@@ -91,7 +91,7 @@ if (( MC_DEVOPS )); then
   devops_args=(--target-dir "$MC_TARGET")
   if (( MC_UPDATE )); then devops_args+=(--update); fi
   if (( MC_SKIP_PACKAGES )); then devops_args+=(--skip-packages); fi
-  bash "$BOOTSTRAP_ROOT/scripts/devops.sh" "${devops_args[@]}"
+  "$BASH" "$BOOTSTRAP_ROOT/scripts/devops.sh" "${devops_args[@]}"
 fi
 mc_log 'Installation completed. Open a new terminal.'
 mc_log 'Local additions belong in ~/.zshrc.local; restyle the prompt with p10k configure.'
