@@ -196,6 +196,10 @@ pass '--skip-packages is forwarded to the optional profile'
   mc_check_fzf() { :; }
   mc_install_repo component "$MC_TARGET/component" "$REMOTE" "$SECOND" "$SECOND" component.zsh
   mc_check_installation >/dev/null
+  cp "$MC_TARGET/component/.git/index" "$TEST_TMP/doctor-index-before"
+  touch "$MC_TARGET/component/component.zsh"
+  mc_check_installation >/dev/null
+  assert_same "$TEST_TMP/doctor-index-before" "$MC_TARGET/component/.git/index"
   printf 'personal change\n' >> "$MC_TARGET/component/component.zsh"
   if mc_check_installation >"$TEST_TMP/doctor.log" 2>&1; then exit 1; fi
   grep -q 'tracked modifications' "$TEST_TMP/doctor.log"
@@ -258,4 +262,153 @@ fi
   assert_same "$TEST_TMP/good-fzf" "$MC_TARGET/.local/share/my-configs/bin/fzf"
 )
 pass 'managed fzf is verified, idempotent and preserves edits or failed updates'
+
+
+# Default package installation never refreshes or upgrades a complete system.
+(
+  MC_OS=Linux MC_UPDATE=0
+  MC_TEST_APT_MISSING=''
+  MC_TEST_APT_LOG="$TEST_TMP/apt-calls"
+  : > "$MC_TEST_APT_LOG"
+  mc_as_root() { "$@"; }
+  apt-get() { printf '%s\n' "$*" >> "$MC_TEST_APT_LOG"; }
+  dpkg-query() {
+    local package
+    for package in "$@"; do :; done
+    [[ "$package" != "$MC_TEST_APT_MISSING" ]] || return 1
+    printf 'installed'
+  }
+  mc_install_packages
+  [[ ! -s "$MC_TEST_APT_LOG" ]]
+  MC_TEST_APT_MISSING=curl
+  mc_install_packages
+  printf 'update\ninstall -y --no-upgrade curl\n' > "$TEST_TMP/apt-expected"
+  assert_same "$TEST_TMP/apt-expected" "$MC_TEST_APT_LOG"
+  : > "$MC_TEST_APT_LOG"
+  MC_TEST_APT_MISSING='' MC_UPDATE=1
+  mc_install_packages
+  printf 'update\ninstall -y ca-certificates zsh git curl fontconfig\n' > "$TEST_TMP/apt-expected"
+  assert_same "$TEST_TMP/apt-expected" "$MC_TEST_APT_LOG"
+)
+pass 'APT defaults to no-op or missing-only install; update targets named packages'
+
+# Homebrew formula checks are read-only; explicit update never means upgrade-all.
+(
+  MC_OS=Darwin MC_UPDATE=0 MC_BOOTSTRAP_BREW=0
+  MC_TEST_BREW_MISSING=''
+  MC_TEST_BREW_LOG="$TEST_TMP/brew-calls"
+  : > "$MC_TEST_BREW_LOG"
+  xcode-select() { return 0; }
+  mc_find_brew() { printf 'mc_test_brew\n'; }
+  mc_test_brew() {
+    [[ ${HOMEBREW_NO_AUTO_UPDATE:-} == 1 \
+      && ${HOMEBREW_NO_INSTALL_UPGRADE:-} == 1 \
+      && ${HOMEBREW_NO_INSTALL_CLEANUP:-} == 1 ]] || return 77
+    printf '%s\n' "$*" >> "$MC_TEST_BREW_LOG"
+    case "$1" in
+      shellenv) ;;
+      list)
+        if [[ "$MC_TEST_BREW_MISSING" == all || "$4" == "$MC_TEST_BREW_MISSING" ]]; then return 1; fi
+        printf '%s 1.0\n' "$4" ;;
+      update|install|upgrade) ;;
+      *) return 1 ;;
+    esac
+  }
+  mc_install_packages
+  if grep -Eq '^(update|install|upgrade)' "$MC_TEST_BREW_LOG"; then exit 1; fi
+  : > "$MC_TEST_BREW_LOG"
+  MC_TEST_BREW_MISSING=curl
+  mc_install_packages
+  grep -qx 'install --formula curl' "$MC_TEST_BREW_LOG"
+  if grep -Eq '^(update|upgrade)' "$MC_TEST_BREW_LOG"; then exit 1; fi
+  : > "$MC_TEST_BREW_LOG"
+  MC_UPDATE=1
+  mc_install_packages
+  grep -qx update "$MC_TEST_BREW_LOG"
+  grep -qx 'install --formula curl' "$MC_TEST_BREW_LOG"
+  grep -qx 'upgrade --formula zsh git' "$MC_TEST_BREW_LOG"
+  : > "$MC_TEST_BREW_LOG"
+  MC_TEST_BREW_MISSING=all
+  mc_install_packages
+  grep -qx 'install --formula zsh git curl' "$MC_TEST_BREW_LOG"
+  if grep -q '^upgrade' "$MC_TEST_BREW_LOG"; then exit 1; fi
+)
+pass 'Homebrew no-op/missing/update paths disable implicit maintenance and cleanup'
+
+# Cache only new/changed fonts. A failed rebuild must remain retryable even if
+# the repaired bytes match the previously successful manifest.
+(
+  MC_OS=Linux MC_TARGET="$TEST_TMP/font-cache-target"
+  MC_STATE="$MC_TARGET/.local/state/my-configs"
+  MC_TEST_FONT_PAYLOAD="$TEST_TMP/font-cache-payload"
+  MC_TEST_FONT_LOG="$TEST_TMP/font-cache-calls"
+  MC_TEST_FONT_FAIL=0
+  printf 'font version one\n' > "$MC_TEST_FONT_PAYLOAD"
+  MC_TEST_FONT_HASH=$(mc_sha256 "$MC_TEST_FONT_PAYLOAD")
+  : > "$MC_TEST_FONT_LOG"
+  mc_font_manifest() { printf 'Regular|%s\n' "$MC_TEST_FONT_HASH"; }
+  mc_download_verified() {
+    mkdir -p "$(dirname "$2")"
+    if [[ ! -f "$2" ]] || ! cmp -s "$MC_TEST_FONT_PAYLOAD" "$2"; then cp "$MC_TEST_FONT_PAYLOAD" "$2"; fi
+  }
+  fc-cache() {
+    printf 'refresh\n' >> "$MC_TEST_FONT_LOG"
+    [[ "$MC_TEST_FONT_FAIL" == 0 ]]
+  }
+  mc_install_fonts
+  [[ $(wc -l < "$MC_TEST_FONT_LOG") -eq 1 ]]
+  cp "$MC_STATE/font-cache.sha256" "$TEST_TMP/font-cache-first-marker"
+  mc_install_fonts
+  [[ $(wc -l < "$MC_TEST_FONT_LOG") -eq 1 ]]
+  assert_same "$TEST_TMP/font-cache-first-marker" "$MC_STATE/font-cache.sha256"
+  printf 'damaged font\n' > "$MC_TARGET/.local/share/fonts/MesloLGS NF Regular.ttf"
+  MC_TEST_FONT_FAIL=1
+  mc_install_fonts
+  [[ $(wc -l < "$MC_TEST_FONT_LOG") -eq 2 && ! -e "$MC_STATE/font-cache.sha256" ]]
+  MC_TEST_FONT_FAIL=0
+  mc_install_fonts
+  [[ $(wc -l < "$MC_TEST_FONT_LOG") -eq 3 && -f "$MC_STATE/font-cache.sha256" ]]
+  mc_install_fonts
+  [[ $(wc -l < "$MC_TEST_FONT_LOG") -eq 3 ]]
+  printf 'font version two\n' > "$MC_TEST_FONT_PAYLOAD"
+  MC_TEST_FONT_HASH=$(mc_sha256 "$MC_TEST_FONT_PAYLOAD")
+  mc_install_fonts
+  [[ $(wc -l < "$MC_TEST_FONT_LOG") -eq 4 ]]
+)
+pass 'font-cache refresh is change-driven and retries after a failed rebuild'
+
+# gsettings values have GVariant string quoting; matching settings need no writes.
+(
+  MC_OS=Linux MC_TARGET="$HOME" DBUS_SESSION_BUS_ADDRESS='test-session'
+  MC_TEST_GSET_DIR="$TEST_TMP/gsettings"
+  MC_TEST_GSET_LOG="$TEST_TMP/gsettings-sets"
+  mkdir -p "$MC_TEST_GSET_DIR"
+  printf 'false\n' > "$MC_TEST_GSET_DIR/use-system-font"
+  printf "'MesloLGS NF 11'\n" > "$MC_TEST_GSET_DIR/font-name"
+  : > "$MC_TEST_GSET_LOG"
+  gsettings() {
+    case "$1" in
+      list-schemas) printf 'org.gnome.Ptyxis\n' ;;
+      get) cat "$MC_TEST_GSET_DIR/$3" ;;
+      set)
+        printf '%s\n' "$*" >> "$MC_TEST_GSET_LOG"
+        if [[ "$4" == false || "$4" == true ]]; then printf '%s\n' "$4" > "$MC_TEST_GSET_DIR/$3"
+        else printf "'%s'\n" "$4" > "$MC_TEST_GSET_DIR/$3"
+        fi ;;
+      *) return 1 ;;
+    esac
+  }
+  mc_configure_terminal_font
+  [[ ! -s "$MC_TEST_GSET_LOG" ]]
+  printf "'Monospace 12'\n" > "$MC_TEST_GSET_DIR/font-name"
+  mc_configure_terminal_font
+  [[ $(wc -l < "$MC_TEST_GSET_LOG") -eq 1 ]]
+  grep -qx 'set org.gnome.Ptyxis font-name MesloLGS NF 11' "$MC_TEST_GSET_LOG"
+  mc_configure_terminal_font
+  [[ $(wc -l < "$MC_TEST_GSET_LOG") -eq 1 ]]
+  printf 'true\n' > "$MC_TEST_GSET_DIR/use-system-font"
+  mc_configure_terminal_font
+  [[ $(wc -l < "$MC_TEST_GSET_LOG") -eq 2 ]]
+)
+pass 'desktop font settings compare current values before writing changes'
 printf '%s total bootstrap regression checks passed\n' "$PASS"

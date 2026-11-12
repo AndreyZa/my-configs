@@ -62,13 +62,37 @@ mc_find_brew() {
   fi
 }
 
+# Keep package-manager maintenance explicit, including Homebrew's implicit work.
+mc_brew() {
+  HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_INSTALL_UPGRADE=1 \
+    HOMEBREW_NO_INSTALL_CLEANUP=1 "$@"
+}
+
 mc_install_packages() {
-  local brew_bin installer
+  local brew_bin installer package status
+  local missing_count=0 installed_count=0
+  local -a packages missing_packages installed_packages
   case "$MC_OS" in
     Linux)
       command -v apt-get >/dev/null 2>&1 || mc_die 'This installer supports Ubuntu/Debian (apt-get) and macOS'
-      mc_as_root apt-get update
-      mc_as_root apt-get install -y ca-certificates zsh git curl fontconfig
+      packages=(ca-certificates zsh git curl fontconfig)
+      for package in "${packages[@]}"; do
+        status=$(dpkg-query -W -f='${db:Status-Status}' "$package" 2>/dev/null) || status=''
+        if [[ "$status" != installed ]]; then
+          missing_packages[missing_count]=$package
+          missing_count=$((missing_count + 1))
+        fi
+      done
+      if (( MC_UPDATE )); then
+        mc_as_root apt-get update
+        # Only these targets (and dependencies required by APT) may be upgraded.
+        mc_as_root apt-get install -y "${packages[@]}"
+      elif (( missing_count )); then
+        mc_as_root apt-get update
+        mc_as_root apt-get install -y --no-upgrade "${missing_packages[@]}"
+      else
+        mc_log 'Base APT packages are already installed'
+      fi
       ;;
     Darwin)
       if ! xcode-select -p >/dev/null 2>&1; then
@@ -85,8 +109,25 @@ mc_install_packages() {
         rm -f "$installer"
         brew_bin=$(mc_find_brew) || mc_die 'Homebrew was not found after installation'
       fi
-      eval "$("$brew_bin" shellenv)"
-      "$brew_bin" install zsh git curl
+      eval "$(mc_brew "$brew_bin" shellenv)"
+      if (( MC_UPDATE )); then mc_brew "$brew_bin" update; fi
+      packages=(zsh git curl)
+      for package in "${packages[@]}"; do
+        status=$(mc_brew "$brew_bin" list --versions --formula "$package" 2>/dev/null) || status=''
+        if [[ -n "$status" ]]; then
+          installed_packages[installed_count]=$package
+          installed_count=$((installed_count + 1))
+        else
+          missing_packages[missing_count]=$package
+          missing_count=$((missing_count + 1))
+        fi
+      done
+      if (( missing_count )); then mc_brew "$brew_bin" install --formula "${missing_packages[@]}"; fi
+      if (( MC_UPDATE && installed_count )); then
+        mc_brew "$brew_bin" upgrade --formula "${installed_packages[@]}"
+      elif (( ! missing_count )); then
+        mc_log 'Base Homebrew formulae are already installed'
+      fi
       ;;
   esac
 }
@@ -284,17 +325,42 @@ mc_check_fzf() {
 }
 
 mc_install_fonts() {
-  local font_dir style blob filename encoded
+  local font_dir style blob filename encoded manifest cache_digest cache_marker marker_tmp
+  local changed=0
   font_dir=$(mc_font_dir)
+  manifest=$(mc_font_manifest)
   while IFS='|' read -r style blob; do
     filename="MesloLGS NF $style.ttf"
     encoded=${filename// /%20}
+    if [[ ! -f "$font_dir/$filename" ]] || [[ $(mc_sha256 "$font_dir/$filename") != "$blob" ]]; then changed=1; fi
     mc_download_verified "https://raw.githubusercontent.com/romkatv/powerlevel10k-media/145eb9fbc2f42ee408dacd9b22d8e6e0e553f83d/$encoded" "$font_dir/$filename" "$blob"
-  done < <(mc_font_manifest)
+  done <<< "$manifest"
   if command -v fc-cache >/dev/null 2>&1; then
-    fc-cache -f "$font_dir" >/dev/null || mc_warn 'Could not refresh the font cache; fonts were installed'
+    cache_marker="$MC_STATE/font-cache.sha256"
+    cache_digest=$(printf '%s\n' "$font_dir" "$manifest" | mc_sha256 -)
+    if (( changed )) || [[ ! -f "$cache_marker" || $(cat "$cache_marker") != "$cache_digest" ]]; then
+      # A failed or interrupted refresh must be retried, even when repaired fonts
+      # have the same content as the previous successful manifest.
+      rm -f "$cache_marker"
+      if fc-cache -f "$font_dir" >/dev/null; then
+        mkdir -p "$MC_STATE"
+        marker_tmp=$(mktemp "$MC_STATE/.font-cache.XXXXXX")
+        printf '%s\n' "$cache_digest" > "$marker_tmp"
+        mc_atomic_copy "$marker_tmp" "$cache_marker"
+        rm -f "$marker_tmp"
+      else
+        mc_warn 'Could not refresh the font cache; the next setup run will retry'
+      fi
+    fi
   fi
   return 0
+}
+
+mc_gsettings_set_if_changed() {
+  local schema=$1 key=$2 desired=$3 current
+  current=$(gsettings get "$schema" "$key" 2>/dev/null) || return 1
+  [[ "$current" != "$desired" && "$current" != "'$desired'" ]] || return 0
+  gsettings set "$schema" "$key" "$desired" 2>/dev/null
 }
 
 mc_configure_terminal_font() {
@@ -305,8 +371,8 @@ mc_configure_terminal_font() {
   [[ -n ${DBUS_SESSION_BUS_ADDRESS:-} ]] || return 0
   schemas=$(gsettings list-schemas 2>/dev/null) || return 0
   if printf '%s\n' "$schemas" | grep -qx org.gnome.Ptyxis; then
-    if ! gsettings set org.gnome.Ptyxis use-system-font false 2>/dev/null \
-      || ! gsettings set org.gnome.Ptyxis font-name 'MesloLGS NF 11' 2>/dev/null; then
+    if ! mc_gsettings_set_if_changed org.gnome.Ptyxis use-system-font false \
+      || ! mc_gsettings_set_if_changed org.gnome.Ptyxis font-name 'MesloLGS NF 11'; then
       mc_warn 'Select MesloLGS NF in Ptyxis settings'
     fi
   fi
@@ -315,8 +381,8 @@ mc_configure_terminal_font() {
     profile=${profile//\'/}
     if [[ -n "$profile" ]]; then
       schema="org.gnome.Terminal.Legacy.Profile:/org/gnome/terminal/legacy/profiles:/:$profile/"
-      if ! gsettings set "$schema" use-system-font false 2>/dev/null \
-        || ! gsettings set "$schema" font 'MesloLGS NF 11' 2>/dev/null; then
+      if ! mc_gsettings_set_if_changed "$schema" use-system-font false \
+        || ! mc_gsettings_set_if_changed "$schema" font 'MesloLGS NF 11'; then
         mc_warn 'Select MesloLGS NF in GNOME Terminal settings'
       fi
     fi
@@ -349,9 +415,9 @@ mc_check_installation() {
     if [[ ! -r "$MC_TARGET/$relative/$entry" ]]; then
       mc_warn "Missing component: $name"; missing=1
     elif [[ -f "$MC_TARGET/$relative/.git/my-configs-owner" ]] && command -v git >/dev/null 2>&1; then
-      current=$(git -C "$MC_TARGET/$relative" rev-parse HEAD 2>/dev/null) || current=''
-      origin=$(git -C "$MC_TARGET/$relative" remote get-url origin 2>/dev/null) || origin=''
-      changes=$(git -C "$MC_TARGET/$relative" status --porcelain --untracked-files=no 2>/dev/null) || changes='unreadable'
+      current=$(GIT_OPTIONAL_LOCKS=0 git -C "$MC_TARGET/$relative" rev-parse HEAD 2>/dev/null) || current=''
+      origin=$(GIT_OPTIONAL_LOCKS=0 git -C "$MC_TARGET/$relative" remote get-url origin 2>/dev/null) || origin=''
+      changes=$(GIT_OPTIONAL_LOCKS=0 git -C "$MC_TARGET/$relative" status --porcelain --untracked-files=no 2>/dev/null) || changes='unreadable'
       if [[ "$current" != "$commit" || "$origin" != "$url" ]]; then
         mc_warn "Managed component does not match its pinned revision/origin: $name"; missing=1
       fi
