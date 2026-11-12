@@ -271,6 +271,8 @@ pass 'managed fzf is verified, idempotent and preserves edits or failed updates'
   MC_TEST_APT_LOG="$TEST_TMP/apt-calls"
   : > "$MC_TEST_APT_LOG"
   mc_as_root() { "$@"; }
+  # Called indirectly by mc_as_root's command dispatch.
+  # shellcheck disable=SC2317
   apt-get() { printf '%s\n' "$*" >> "$MC_TEST_APT_LOG"; }
   dpkg-query() {
     local package
@@ -300,6 +302,8 @@ pass 'APT defaults to no-op or missing-only install; update targets named packag
   : > "$MC_TEST_BREW_LOG"
   xcode-select() { return 0; }
   mc_find_brew() { printf 'mc_test_brew\n'; }
+  # Called indirectly through the command returned by mc_find_brew.
+  # shellcheck disable=SC2317
   mc_test_brew() {
     [[ ${HOMEBREW_NO_AUTO_UPDATE:-} == 1 \
       && ${HOMEBREW_NO_INSTALL_UPGRADE:-} == 1 \
