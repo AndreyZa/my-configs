@@ -21,10 +21,12 @@ export MISE_STATE_DIR="$target/.local/state/my-configs/mise"
 export MISE_LOCKFILE=false
 export UV_PYTHON_INSTALL_DIR="$MISE_DATA_DIR/ansible-python"
 export UV_CACHE_DIR="$MISE_CACHE_DIR/uv"
+export PATH="$MISE_DATA_DIR/shims:$PATH"
 cd /
 "$MISE_DATA_DIR/shims/kubectl" version --client
 "$MISE_DATA_DIR/shims/helm" version --short
-"$MISE_DATA_DIR/shims/kubecolor" --version
+# kubecolor forwards kubectl arguments; exercise it with the managed kubectl.
+"$MISE_DATA_DIR/shims/kubecolor" version --client
 "$MISE_DATA_DIR/shims/terraform" version
 "$MISE_DATA_DIR/shims/terragrunt" --version
 "$MISE_DATA_DIR/shims/ansible" --version
