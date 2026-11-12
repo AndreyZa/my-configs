@@ -227,7 +227,9 @@ mise_run() {
 # for an already-pinned version, so compare stored values through the TOML API.
 if [ "$HAD_PROFILE" -eq 0 ] || [ "$UPDATE" -eq 1 ]; then
   for tool in "${TOOLS[@]}"; do
-    key="tools.\"$tool\""
+    # These registry IDs contain no dots. Older mise versions treat quote
+    # characters in CLI dotted paths literally, so pass bare path segments.
+    key="tools.$tool"
     if current=$(mise_run config get --file "$ACTIVE_PROFILE" "$key.version" 2>/dev/null); then
       key="$key.version"
     else
@@ -239,7 +241,7 @@ if [ "$HAD_PROFILE" -eq 0 ] || [ "$UPDATE" -eq 1 ]; then
       mise_run config set --file "$ACTIVE_PROFILE" --type string -- "$key" "$latest"
     fi
   done
-  key='tools."pipx:ansible-core".uvx_args'
+  key='tools.pipx:ansible-core.uvx_args'
   current=$(mise_run config get --file "$ACTIVE_PROFILE" "$key" 2>/dev/null || true)
   if [ "$current" != "$ANSIBLE_PYTHON_ARGS" ]; then
     mise_run config set --file "$ACTIVE_PROFILE" --type string -- "$key" "$ANSIBLE_PYTHON_ARGS"

@@ -39,7 +39,10 @@ def read_tools():
     return tools
 
 def parse_key(key):
-    match = re.fullmatch(r'tools\."([^"]+)"(?:\.(\w+))?', key)
+    # mise 2026.8.x interprets embedded CLI quotes as part of the tool name.
+    # Reject that spelling instead of silently normalizing it in this model.
+    assert '"' not in key, 'Quoted CLI key breaks older mise: ' + key
+    match = re.fullmatch(r'tools\.([\w:-]+)(?:\.(\w+))?', key)
     assert match, key
     return match[1], match[2]
 
@@ -171,6 +174,8 @@ printf '[tools]\nrust = "stable"\n' > "$TARGET/.config/mise/conf.d/user.toml"
 cp "$TARGET/.config/mise/config.toml" "$FIXTURE/user-config"
 cp "$TARGET/.config/mise/conf.d/user.toml" "$FIXTURE/user-fragment"
 run_profile > "$FIXTURE/output"
+grep -q 'tools.pipx:ansible-core.uvx_args' "$LOG" || fail 'backend option path was not exercised'
+if grep -q 'tools\."' "$LOG"; then fail 'quoted CLI tool key was used'; fi
 PROFILE="$TARGET/.config/mise/conf.d/my-configs-devops.toml"
 MANIFEST="$TARGET/.local/state/my-configs/devops-executables.tsv"
 [ -f "$PROFILE" ] || fail 'profile missing'
