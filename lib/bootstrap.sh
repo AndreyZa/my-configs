@@ -180,7 +180,15 @@ mc_atomic_copy() {
   stage=$(mktemp "${dest}.tmp.XXXXXX")
   if ! cp "$source" "$stage"; then rm -f "$stage"; return 1; fi
   chmod 600 "$stage"
-  mv -f "$stage" "$dest"
+  # Do not let mv follow a destination symlink into a directory.
+  if [[ -L "$dest" && -d "$dest" ]]; then
+    case "$(uname -s)" in
+      Darwin) mv -f -h "$stage" "$dest" ;;
+      *) mv -f -T "$stage" "$dest" ;;
+    esac
+  else
+    mv -f "$stage" "$dest"
+  fi
 }
 
 # A pending marker records the exact reviewable candidate without rewriting a
@@ -322,8 +330,8 @@ mc_install_config() {
   baseline="$MC_STATE/templates/$key"
   [[ -f "$source" ]] || mc_die "Missing repository configuration: $source"
   if [[ -f "$dest" ]] && cmp -s "$source" "$dest"; then
-    # An existing symlink with identical content is already usable; keep it.
-    if [[ ! -L "$dest" ]]; then mc_atomic_copy "$source" "$baseline"; fi
+    # An identical symlink remains in place; only its state baseline is written.
+    mc_atomic_copy "$source" "$baseline"
     mc_clear_applied_candidates "$source" "$dest" "$key"
     return 0
   fi

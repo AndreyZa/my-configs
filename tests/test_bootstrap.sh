@@ -455,6 +455,45 @@ pass 'desktop font settings compare current values before writing changes'
 )
 pass 'activation cleans matching candidates while preserving edited drafts and symlinks'
 
+# An active symlink still needs a baseline when an edited draft outlives its marker.
+(
+  MC_TARGET="$TEST_TMP/activation-identical-symlink"
+  MC_STATE="$MC_TARGET/.local/state/my-configs"
+  MC_REPLACE=0 MC_CONFLICTS=0 MC_BACKUP_DIR=''
+  mkdir -p "$MC_TARGET" "$MC_STATE/templates"
+  printf '# repository configuration\n' > "$TEST_TMP/identical-symlink-source"
+  printf '# current user configuration\n' > "$MC_TARGET/.zshrc"
+  mc_install_config "$TEST_TMP/identical-symlink-source" "$MC_TARGET/.zshrc" zshrc
+  printf '# edited draft\n' >> "$MC_TARGET/.zshrc.my-configs-new"
+  rm "$MC_TARGET/.zshrc"
+  ln -s "$TEST_TMP/identical-symlink-source" "$MC_TARGET/.zshrc"
+  MC_CONFLICTS=0
+  mc_install_config "$TEST_TMP/identical-symlink-source" "$MC_TARGET/.zshrc" zshrc
+  [[ -L "$MC_TARGET/.zshrc" && $MC_CONFLICTS -eq 0 ]]
+  [[ ! -e "$MC_STATE/pending/zshrc" ]]
+  assert_same "$TEST_TMP/identical-symlink-source" "$MC_STATE/templates/zshrc"
+  grep -q 'edited draft' "$MC_TARGET/.zshrc.my-configs-new"
+  if mc_config_is_pending "$MC_TARGET/.zshrc" zshrc; then exit 1; fi
+)
+pass 'identical symlink records a baseline and clears stale pending state'
+
+# Atomic replacement targets the symlink itself, never the referenced directory.
+(
+  MC_TARGET="$TEST_TMP/atomic-directory-symlink"
+  MC_STATE="$MC_TARGET/.local/state/my-configs"
+  MC_REPLACE=1 MC_CONFLICTS=0 MC_BACKUP_DIR=''
+  mkdir -p "$MC_TARGET" "$MC_STATE/templates" "$TEST_TMP/atomic-actual-directory"
+  printf '# repository configuration\n' > "$TEST_TMP/atomic-source"
+  ln -s "$TEST_TMP/atomic-actual-directory" "$MC_TARGET/.zshrc"
+  mc_install_config "$TEST_TMP/atomic-source" "$MC_TARGET/.zshrc" zshrc
+  [[ ! -L "$MC_TARGET/.zshrc" && -f "$MC_TARGET/.zshrc" ]]
+  assert_same "$TEST_TMP/atomic-source" "$MC_TARGET/.zshrc"
+  [[ -L "$MC_BACKUP_DIR/zshrc" ]]
+  [[ $(readlink "$MC_BACKUP_DIR/zshrc") == "$TEST_TMP/atomic-actual-directory" ]]
+  [[ -z $(find "$TEST_TMP/atomic-actual-directory" -mindepth 1 -print -quit) ]]
+)
+pass 'atomic copy replaces a directory symlink without entering its target'
+
 # A pending configuration is not a successful doctor result, including legacy
 # candidates created before pending-state markers existed.
 (
