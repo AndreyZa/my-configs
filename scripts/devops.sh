@@ -86,8 +86,9 @@ if [ "$CHECK" -eq 1 ]; then
     if [ -f "$EXECUTABLES" ]; then
       executable=$(awk -F '\t' -v name="$name" '$1 == name {print $2}' "$EXECUTABLES")
     fi
-    [ -f "$executable" ] && [ -x "$executable" ] \
-      || { log "Missing installed executable: $name"; missing=1; }
+    if [ ! -f "$executable" ] || [ ! -x "$executable" ]; then
+      log "Missing installed executable: $name"; missing=1
+    fi
   done
   [ "$missing" -eq 0 ] && log 'Managed profile, shims and installed CLI executables are present'
   exit "$missing"
@@ -183,7 +184,9 @@ digest "$PROFILE" > "$TEMP_DIR/digest"
 printf 'profile_sha256\t%s\n' "$(cat "$TEMP_DIR/digest")" > "$TEMP_DIR/executables"
 for name in "${COMMANDS[@]}"; do
   executable=$(mise_run which "$name")
-  [ -f "$executable" ] && [ -x "$executable" ] || die "mise did not install the $name executable"
+  if [ ! -f "$executable" ] || [ ! -x "$executable" ]; then
+    die "mise did not install the $name executable"
+  fi
   printf '%s\t%s\n' "$name" "$executable" >> "$TEMP_DIR/executables"
 done
 ACTIVE_SHIMS_DIR="$DATA_DIR/shims"

@@ -91,6 +91,8 @@ pass 'unmanaged framework is never replaced'
 # Reproduce the macOS missing-fc-cache path without changing PATH or HOME.
 (
   MC_OS=Darwin
+  # ShellCheck 0.9 cannot see this wrapper being called by mc_install_fonts.
+  # shellcheck disable=SC2317
   command() { if [[ "${1:-}" == -v && "${2:-}" == fc-cache ]]; then return 1; fi; builtin command "$@"; }
   mc_download_verified() { :; }
   mc_install_fonts
@@ -140,8 +142,18 @@ assert_same "$TEST_TMP/template" "$MC_TARGET/.zshrc.my-configs-new"
 pass 'a symlink to the old template remains a user customization'
 
 # Root protection must operate on resolved paths, not only a literal slash.
+# macOS TMPDIR can be deep and /tmp or /var can be symlinks: count physical parents.
+TEST_PHYSICAL_TMP=$(cd "$TEST_TMP" && pwd -P)
+ROOT_PARENT_PATH="$TEST_PHYSICAL_TMP"
+ROOT_DOT_PATH="$TEST_PHYSICAL_TMP"
+ROOT_MISSING_PATH="$TEST_PHYSICAL_TMP/does-not-exist/.."
+while [[ "$ROOT_PARENT_PATH" != / ]]; do
+  ROOT_DOT_PATH="$ROOT_DOT_PATH/.."
+  ROOT_MISSING_PATH="$ROOT_MISSING_PATH/.."
+  ROOT_PARENT_PATH=$(dirname "$ROOT_PARENT_PATH")
+done
 ln -s / "$TEST_TMP/root-link"
-for target in /tmp/.. "$TEST_TMP/root-link" "$TEST_TMP/does-not-exist/../../../.."; do
+for target in "$ROOT_DOT_PATH" "$TEST_TMP/root-link" "$ROOT_MISSING_PATH"; do
   if bash "$TEST_ROOT/setup.sh" --check --no-fonts --target-dir "$target" >"$TEST_TMP/root-check.log" 2>&1; then
     printf 'Root target was accepted: %s\n' "$target" >&2; exit 1
   fi
